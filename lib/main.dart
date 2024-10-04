@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:html/parser.dart';
+import 'package:http/http.dart' as http;
 
 void main() {
   runApp(MyApp());
@@ -8,103 +12,268 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      home: BatchScreen(),
+      title: 'Web Scraper',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+      ),
+      home: MyHomePage(),
     );
   }
 }
 
-class BatchScreen extends StatefulWidget {
+class MyHomePage extends StatefulWidget {
   @override
-  _BatchScreenState createState() => _BatchScreenState();
+  _MyHomePageState createState() => _MyHomePageState();
 }
 
-class _BatchScreenState extends State<BatchScreen> with SingleTickerProviderStateMixin {
-  late TabController _tabController;
+class _MyHomePageState extends State<MyHomePage> {
+  TextEditingController urlController = TextEditingController();
+  TextEditingController startController = TextEditingController();
+  TextEditingController endController = TextEditingController();
 
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 3, vsync: this);
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
-  }
+  String output = "";
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Batch'),
-        centerTitle: true,
-        leading: Icon(Icons.menu),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.account_circle),
-            onPressed: () {
-              // Add profile action here
-            },
-          ),
-        ],
-        bottom: PreferredSize(
-          preferredSize: Size.fromHeight(50.0),
-          child: Container(
-            color: Colors.purple.shade50,
-            child: TabBar(
-              controller: _tabController,
-              labelColor: Colors.black,
-              indicatorColor: Colors.purple,
-              tabs: [
-                Tab(text: 'Fetch Urls'),
-                Tab(text: 'Download'),
-                Tab(text: 'Replace'),
-              ],
-            ),
-          ),
-        ),
+        title: Text("Web Scraper"),
       ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          // Fetch Urls Tab
-          FetchUrlsTab(),
-          // Download Tab
-          Center(child: Text('Download Tab')),
-          // Replace Tab
-          Center(child: Text('Replace Tab')),
-        ],
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: <Widget>[
+            TextField(
+              controller: urlController,
+              decoration: InputDecoration(labelText: "Enter URL"),
+            ),
+            TextField(
+              controller: startController,
+              decoration: InputDecoration(labelText: "Enter Start Episode"),
+              keyboardType: TextInputType.number,
+            ),
+            TextField(
+              controller: endController,
+              decoration: InputDecoration(labelText: "Enter End Episode"),
+              keyboardType: TextInputType.number,
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () async {
+                final url = urlController.text;
+                final start = int.tryParse(startController.text) ?? 1;
+                final end = int.tryParse(endController.text);
+
+                if (url.isNotEmpty) {
+                  setState(() {
+                    output = "Fetching data...";
+                  });
+
+                  await fetchEpisodes(
+                      url, start, end, (message) {
+                    setState(() {
+                      output += "\n$message";
+                    });
+                  });
+
+                } else {
+                  setState(() {
+                    output = "Please enter a valid URL.";
+                  });
+                }
+              },
+              child: Text("Start Scraping"),
+            ),
+            SizedBox(height: 20),
+            Expanded(
+              child: SingleChildScrollView(
+                child: Text(output),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class FetchUrlsTab extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: Column(
-        children: [
-          TextField(
-            decoration: InputDecoration(
-              labelText: 'Value',
-              suffixIcon: IconButton(
-                icon: Icon(Icons.clear),
-                onPressed: () {
-                  // Clear action
-                },
-              ),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(30.0),
-              ),
-            ),
-          ),
-          SizedBox(height: 20),
-          // Add other widgets or functionalities for this tab as required.
-        ],
-      ),
-    );
+// Helper function to log messages to console and a file
+void logMessage(String message) {
+  final now = DateTime.now();
+  final formattedTime = "${now.year}-${now.month}-${now.day} ${now.hour}:${now.minute}";
+  final logMessage = "$formattedTime: $message";
+
+  // Print to console
+  print(logMessage);
+
+  // Append log to a file
+  final logFile = File('log_${now.year}-${now.month}-${now.day}.txt');
+  logFile.writeAsStringSync("$logMessage\n", mode: FileMode.append, flush: true);
+}
+
+// Fetch episodes based on the provided URL
+Future<void> fetchEpisodes(String url, int start, int? end, Function(String) callback) async {
+  logMessage("Starting to fetch episodes from $url");
+
+  if (url.contains("asianload") || url.contains("mkvdrama")) {
+    await saveM3u8Asianload(url, start, end ?? start, callback);
+  } else if (url.contains("yugenanime")) {
+    await saveM3u8Yugen(url, "https://yugenanime.tv/api/embed/", start, end ?? start, callback);
+  } else if (url.contains("kisskh")) {
+    await getM3u8KissKH(url, 'output.txt', callback);
+  } else {
+    logMessage("Unsupported website");
+    callback("Unsupported website");
+  }
+}
+
+// Function to save m3u8 URLs from Asianload/MKVDrama
+Future<void> saveM3u8Asianload(String baseUrl, int start, int end, Function(String) callback) async {
+  String seriesName = baseUrl.split('/videos/')[1].split('-episode')[0];
+  String baseVideoUrl = "https://stream.mkvdrama.org/streaming.php?slug=";
+  String outputFilename = "$seriesName.txt";
+
+  for (int episodeNumber = start; episodeNumber <= end; episodeNumber++) {
+    String url = "$baseVideoUrl$seriesName-episode-$episodeNumber";
+    String? m3u8Url = await getM3u8Asianload(url, 1, callback);
+    if (m3u8Url != null) {
+      File(outputFilename).writeAsStringSync("$m3u8Url\n", mode: FileMode.writeOnlyAppend, flush: true);
+    }
+  }
+  callback("URLs saved to $outputFilename");
+}
+
+// Function to get m3u8 URL from Asianload/MKVDrama
+Future<String?> getM3u8Asianload(String url, int count, Function(String) callback) async {
+  if (count > 20) {
+    callback("Error: Could not find the video source URL after 20 attempts.");
+    return null;
+  }
+
+  logMessage("Fetching $url (attempt $count)");
+  final response = await http.get(Uri.parse(url), headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+  });
+
+  if (response.statusCode == 200) {
+    final soup = parse(response.body);
+    final mediaPlayer = soup.getElementsByTagName('media-player').first;
+    final srcUrl = mediaPlayer.attributes['src'];
+
+    if (srcUrl != null) {
+      logMessage("Got URL for episode");
+      return srcUrl.replaceAll(".m3u8", ".1080.m3u8");
+    } else {
+      logMessage("Media player not found. Retrying...");
+      return await getM3u8Asianload(url, count + 1, callback);
+    }
+  } else {
+    logMessage("Error fetching webpage: ${response.statusCode}");
+    return null;
+  }
+}
+
+// Function to save m3u8 URLs from YugenAnime
+Future<void> saveM3u8Yugen(String url, String apiBaseUrl, int start, int end, Function(String) callback) async {
+  String seriesName = url.split('/watch/')[1].split('/')[1];
+  String outputFilename = "$seriesName.txt";
+
+  for (int episodeNumber = start; episodeNumber <= end; episodeNumber++) {
+    String episodeUrl = "$url$episodeNumber/";
+    String? m3u8Url = await getM3u8Yugen(episodeUrl, apiBaseUrl, episodeNumber, callback);
+    if (m3u8Url != null) {
+      File(outputFilename).writeAsStringSync("$m3u8Url\n", mode: FileMode.append, flush: true);
+    }
+  }
+  callback("URLs saved to $outputFilename");
+}
+
+// Function to get m3u8 URL from YugenAnime
+// Function to get m3u8 URL from YugenAnime
+Future<String?> getM3u8Yugen(String url, String apiBaseUrl, int episodeNumber, Function(String) callback) async {
+  logMessage("Fetching YugenAnime URL for episode $episodeNumber");
+
+  final response = await http.get(Uri.parse(url));
+
+  if (response.statusCode == 200) {
+    final soup = parse(response.body);
+    final iframeTag = soup.querySelector("#main-embed");
+
+    if (iframeTag != null) {
+      final iframeSrc = iframeTag.attributes['src'];
+
+      if (iframeSrc != null) {
+        final eId = iframeSrc.split('/')[4];  // Only attempt to split if iframeSrc is non-null
+        final refUrl = "https://yugenanime.tv/e/$eId/";
+
+        final headers = {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "Referer": refUrl,
+          "X-Requested-With": "XMLHttpRequest"
+        };
+
+        final response1 = await http.post(Uri.parse(apiBaseUrl), body: {"id": eId, "ac": "0"}, headers: headers);
+
+        if (response1.statusCode == 200) {
+          final data = jsonDecode(response1.body);
+          final hlsUrl = data["hls"][0];
+
+          if (hlsUrl != null) {
+            logMessage("Found URL for episode $episodeNumber");
+            return hlsUrl.replaceAll(".m3u8", ".1080.m3u8");
+          } else {
+            logMessage("Stream URL not found for episode $episodeNumber");
+            return null;
+          }
+        }
+      } else {
+        logMessage("iframeSrc is null. Could not extract episode ID.");
+        callback("iframeSrc is null. Could not extract episode ID.");
+        return null;
+      }
+    }
+  }
+
+  logMessage("Failed to fetch episode $episodeNumber from YugenAnime");
+  return null;
+}
+
+// Function to fetch m3u8 URLs and subtitles from KissKH
+Future<void> getM3u8KissKH(String url, String outputFilename, Function(String) callback) async {
+  logMessage("Fetching KissKH m3u8 URLs");
+
+  final nameId = url.split('/Drama/')[1].split('?id=');
+  final seriesName = nameId[0];
+  final dramaUrl = "https://kisskh.co/api/DramaList/Drama/" + nameId[1].split('&q')[0];
+
+  final response = await http.get(Uri.parse(dramaUrl));
+
+  if (response.statusCode == 200) {
+    final data = jsonDecode(response.body);
+    final episodes = data["episodes"]..sort((a, b) => a["id"].compareTo(b["id"]));
+
+    for (var episode in episodes) {
+      final videoResponse = await http.get(Uri.parse("https://kisskh.co/api/DramaList/Episode/${episode['id']}.png"));
+      final subtitleResponse = await http.get(Uri.parse("https://kisskh.co/api/Sub/${episode['id']}"));
+
+      if (videoResponse.statusCode == 200) {
+        final videoUrl = jsonDecode(videoResponse.body)["Video"];
+        logMessage("Found video URL for episode ${episode['number']}");
+        File(outputFilename).writeAsStringSync("$videoUrl\n", mode: FileMode.append, flush: true);
+      }
+
+      // Save subtitles
+      for (var sub in jsonDecode(subtitleResponse.body)) {
+        if (sub["label"] == "English") {
+          final subtitleContent = await http.get(Uri.parse(sub["src"]));
+          File("${seriesName}_${episode['number']}.srt").writeAsStringSync(subtitleContent.body);
+          logMessage("Saved subtitle for episode ${episode['number']}");
+        }
+      }
+    }
+
+    callback("URLs and subtitles saved successfully!");
+  } else {
+    logMessage("Failed to fetch data from KissKH");
   }
 }
