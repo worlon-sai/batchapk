@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -16,84 +17,162 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
-      home: MyHomePage(),
+      home: MainScreen(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
+class MainScreen extends StatefulWidget {
   @override
-  _MyHomePageState createState() => _MyHomePageState();
+  _MainScreenState createState() => _MainScreenState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  TextEditingController urlController = TextEditingController();
-  TextEditingController startController = TextEditingController();
-  TextEditingController endController = TextEditingController();
+class _MainScreenState extends State<MainScreen> {
+  int _selectedIndex = 0;
 
-  String output = "";
+  static List<Widget> _widgetOptions = <Widget>[
+    WebScrapingScreen(),
+    Center(child: Text("Download screen - Empty")),
+    Center(child: Text("Replace screen - Empty")),
+  ];
+
+  void _onItemTapped(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("Web Scraper"),
+        title: Text('Web Scraper'),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: <Widget>[
-            TextField(
-              controller: urlController,
-              decoration: InputDecoration(labelText: "Enter URL"),
-            ),
-            TextField(
-              controller: startController,
-              decoration: InputDecoration(labelText: "Enter Start Episode"),
-              keyboardType: TextInputType.number,
-            ),
-            TextField(
-              controller: endController,
-              decoration: InputDecoration(labelText: "Enter End Episode"),
-              keyboardType: TextInputType.number,
-            ),
-            SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: () async {
-                final url = urlController.text;
-                final start = int.tryParse(startController.text) ?? 1;
-                final end = int.tryParse(endController.text);
-
-                if (url.isNotEmpty) {
-                  setState(() {
-                    output = "Fetching data...";
-                  });
-
-                  await fetchEpisodes(
-                      url, start, end, (message) {
-                    setState(() {
-                      output += "\n$message";
-                    });
-                  });
-
-                } else {
-                  setState(() {
-                    output = "Please enter a valid URL.";
-                  });
-                }
-              },
-              child: Text("Start Scraping"),
-            ),
-            SizedBox(height: 20),
-            Expanded(
-              child: SingleChildScrollView(
-                child: Text(output),
-              ),
-            ),
-          ],
-        ),
+      body: _widgetOptions[_selectedIndex],
+      bottomNavigationBar: BottomNavigationBar(
+        items: const <BottomNavigationBarItem>[
+          BottomNavigationBarItem(
+            icon: Icon(Icons.search),
+            label: 'Fetch URLs',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.download),
+            label: 'Download',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.sync),
+            label: 'Replace',
+          ),
+        ],
+        currentIndex: _selectedIndex,
+        selectedItemColor: Colors.blue,
+        onTap: _onItemTapped,
       ),
     );
+  }
+}
+
+class WebScrapingScreen extends StatefulWidget {
+  @override
+  _WebScrapingScreenState createState() => _WebScrapingScreenState();
+}
+
+class _WebScrapingScreenState extends State<WebScrapingScreen> {
+  TextEditingController urlController = TextEditingController();
+  TextEditingController startController = TextEditingController();
+  TextEditingController endController = TextEditingController();
+  String output = "";
+  bool isFetching = false; // Track fetching process
+  Timer? fetchTimer; // Timer to simulate fetching
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        children: <Widget>[
+          TextField(
+            controller: urlController,
+            decoration: InputDecoration(
+              labelText: "Enter URL",
+              suffixIcon: urlController.text.isNotEmpty
+                  ? IconButton(
+                      icon: Icon(Icons.clear),
+                      onPressed: () {
+                        setState(() {
+                          urlController.clear(); // Clear URL input
+                          if (isFetching) {
+                            // Stop fetching process
+                            stopFetching();
+                          }
+                        });
+                      },
+                    )
+                  : null,
+            ),
+            onChanged: (value) {
+              setState(() {}); // Refresh the UI when text changes
+            },
+          ),
+          TextField(
+            controller: startController,
+            decoration: InputDecoration(labelText: "Enter Start Episode"),
+            keyboardType: TextInputType.number,
+          ),
+          TextField(
+            controller: endController,
+            decoration: InputDecoration(labelText: "Enter End Episode"),
+            keyboardType: TextInputType.number,
+          ),
+          SizedBox(height: 20),
+          ElevatedButton(
+            onPressed: () async {
+              final url = urlController.text;
+              final start = int.tryParse(startController.text) ?? 1;
+              final end = int.tryParse(endController.text);
+
+              if (url.isNotEmpty) {
+                setState(() {
+                  output = "Fetching data...";
+                  isFetching = true; // Mark as fetching
+                });
+
+                // Simulate a long-running task
+                await fetchEpisodes(
+                      url, start, end, (message) {
+                  setState(() {
+                  output += "\n$message";
+                    isFetching = false; // Mark as done
+                  });
+                });
+              } else {
+                setState(() {
+                  output = "Please enter a valid URL.";
+                });
+              }
+            },
+            child: Text("Start Scraping"),
+          ),
+          SizedBox(height: 20),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Text(output),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void stopFetching() {
+    // Logic to stop fetching
+    if (fetchTimer != null && fetchTimer!.isActive) {
+      fetchTimer!.cancel();
+      setState(() {
+        output = "Fetching stopped.";
+        isFetching = false;
+      });
+    }
   }
 }
 
@@ -194,7 +273,7 @@ Future<String?> getM3u8Yugen(String url, String apiBaseUrl, int episodeNumber, F
   logMessage("Fetching YugenAnime URL for episode $episodeNumber");
 
   final response = await http.get(Uri.parse(url));
-
+  logMessage("reponse from yugen $response");
   if (response.statusCode == 200) {
     final soup = parse(response.body);
     final iframeTag = soup.querySelector("#main-embed");
