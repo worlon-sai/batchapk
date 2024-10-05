@@ -6,6 +6,7 @@ import 'package:html/parser.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import 'download.dart';
 import 'fetchurls.dart';
 
 void main() {
@@ -37,10 +38,8 @@ class _MainScreenState extends State<MainScreen> {
   final PageStorageBucket _bucket = PageStorageBucket();
 
   static List<Widget> _widgetOptions = <Widget>[
-    WebScrapingScreen(
-        key: PageStorageKey(
-            'web_scraping')), // Assign a key for state persistence
-    Center(child: Text("Download screen - Empty")),
+    WebScrapingScreen(), // Assign a key for state persistence
+    DownloadScreen(),
     Center(child: Text("Replace screen - Empty")),
   ];
 
@@ -54,7 +53,7 @@ class _MainScreenState extends State<MainScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Web Scraper'),
+        title: Text('Batch Downloader'),
       ),
       // Wrap body with PageStorage to enable state persistence
       body: PageStorage(

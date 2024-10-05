@@ -19,8 +19,7 @@ class EpisodeData {
 }
 
 class WebScrapingScreen extends StatefulWidget {
-  const WebScrapingScreen({Key? key})
-      : super(key: key); // Ensure the key is passed
+  // Ensure the key is passed
   @override
   _WebScrapingScreenState createState() => _WebScrapingScreenState();
 }
