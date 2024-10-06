@@ -255,6 +255,9 @@ Future<String?> getM3u8Asianload(
     final srcUrl = mediaPlayer.attributes['src'];
 
     if (srcUrl != null) {
+      if (srcUrl.contains('original')) {
+        return srcUrl;
+      }
       return srcUrl.replaceAll(".m3u8", ".1080.m3u8");
     } else {
       return await getM3u8Asianload(url, count + 1, callback);
@@ -267,12 +270,18 @@ Future<String?> getM3u8Asianload(
 // Function to save m3u8 URLs from YugenAnime with error handling
 Future<void> saveM3u8Yugen(String baseUrl, String embedBaseUrl, int start,
     int end, Function(EpisodeData) callback) async {
-  String seriesName = baseUrl.split('/watch/')[1].split('/')[0];
+  String seriesName = baseUrl.split('/watch/')[1].split('/')[1];
   String outputFilename = "$seriesName.txt";
 
   for (int episodeNumber = start; episodeNumber <= end; episodeNumber++) {
     try {
-      String url = "$embedBaseUrl$seriesName-episode-$episodeNumber";
+      String url = "https://yugenanime.tv/watch/" +
+          baseUrl.split('/watch/')[1].split('/')[0] +
+          "/" +
+          seriesName +
+          "/" +
+          episodeNumber.toString() +
+          "/";
       String? m3u8Url = await getM3u8Yugen(url, episodeNumber, callback);
       if (m3u8Url != null) {
         final directory = await getExternalStorageDirectory();
@@ -319,15 +328,44 @@ Future<String?> getM3u8Yugen(
     String apiUrl, int episodeNumber, Function(EpisodeData) callback) async {
   try {
     // Make the API call to fetch the episode's embed details
-    final response = await http.get(Uri.parse('$apiUrl$episodeNumber'));
+    final response = await http.get(Uri.parse('$apiUrl'));
+    final baseUrl = "https://yugenanime.tv/api/embed/";
 
+    // Check if the request was successful
+    final responsebody = response.body;
     if (response.statusCode == 200) {
-      final jsonResponse = jsonDecode(response.body);
+      final soup = parse(responsebody);
+      final mediaPlayer = soup.getElementsByTagName('iframe').first;
+      final srcUrl = mediaPlayer.attributes['src'];
+      final eId = srcUrl?.split('/e/')[1].split('/')[0];
+      Map<String, String> formData = {"id": eId != null ? eId : "", "ac": "0"};
 
-      // Check if the video stream is present
-      if (jsonResponse.containsKey('stream_url')) {
-        return jsonResponse['stream_url'];
+      // Headers equivalent
+      Map<String, String> headers = {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Referer": srcUrl != null ? srcUrl : "",
+        "X-Requested-With": "XMLHttpRequest"
+      };
+
+      // Make the POST request
+      var response = await http.post(
+        Uri.parse(baseUrl),
+        body: formData,
+        headers: headers,
+      );
+
+      // Check if the request was successful
+      if (response.statusCode == 200) {
+        // Parse the JSON response
+        var data = json.decode(response.body);
+
+        print("Response data: $data");
+        var hlsArray = data['hls'];
+        return hlsArray[0];
       } else {
+        // Handle the error
+
+        print("Error: ${response.statusCode}");
         callback(EpisodeData(
             episodeNumber: episodeNumber,
             status: "Stream not found",
