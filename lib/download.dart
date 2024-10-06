@@ -171,6 +171,16 @@ class _DownloadScreenState extends State<DownloadScreen> {
         .where((file) => file.path.endsWith('.ts'))
         .toList();
 
+    tsFiles.sort((a, b) {
+      int getSegmentNumber(String filePath) {
+        RegExp regex = RegExp(r'segment-(\d+)\.ts');
+        Match? match = regex.firstMatch(filePath);
+        return match != null ? int.parse(match.group(1)!) : 0;
+      }
+
+      return getSegmentNumber(a.path).compareTo(getSegmentNumber(b.path));
+    });
+
     if (tsFiles.isEmpty) {
       print("No .ts files found to merge in directory: $folderPath");
       setState(() {
