@@ -4,7 +4,8 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.5.3
+  sdk: ">=3.3.0 <3.6.0"
+  flutter: ">=3.19.0 <4.0.0"
 
 dependencies:
   flutter:
@@ -13,7 +14,7 @@ dependencies:
   html: ^0.15.0
   path_provider: ^2.0.12
   permission_handler: ^11.3.1
-  file_picker: ^8.1.2
+  file_picker: 8.0.5
   ffmpeg_kit_flutter: ^6.0.3  # Replace flutter_ffmpeg with this
   cupertino_icons: ^1.0.8
   dio: ^5.7.0
@@ -21,7 +22,7 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^5.0.0
+  flutter_lints: ">=4.0.0 <=5.0.0"
 
 flutter:
   uses-material-design: true
