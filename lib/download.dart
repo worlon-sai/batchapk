@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
@@ -5,14 +7,7 @@ import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
 import 'package:permission_handler/permission_handler.dart';
-
-Future<void> checkStoragePermission() async {
-  if (await Permission.storage.request().isGranted) {
-    // You can access external storage
-  } else {
-    // Handle the case where permission is denied
-  }
-}
+import 'dart:async';
 
 class DownloadScreen extends StatefulWidget {
   const DownloadScreen({Key? key}) : super(key: key);
@@ -43,10 +38,31 @@ class _DownloadScreenState extends State<DownloadScreen> {
   String? selectedFilePath;
   Dio dio = Dio();
   List<DownloadStatus> downloadStatuses = [];
+  int maxParallelDownloads = 1;
+  final TextEditingController _parallelDownloadsController =
+      TextEditingController(text: '1');
+  final Queue<int> _downloadQueue = Queue<int>(); // Queue to manage downloads
 
-  Future<void> selectFile() async {
+  @override
+  void initState() {
+    super.initState();
+    _parallelDownloadsController.addListener(() {
+      setState(() {
+        maxParallelDownloads = int.tryParse(_parallelDownloadsController.text) ??
+            1; 
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _parallelDownloadsController.dispose();
+    super.dispose();
+  }
+
+ Future<void> selectFile() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.any, // Allow any file type to be selected
+      type: FileType.any,
     );
 
     if (result != null) {
@@ -60,7 +76,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
     }
   }
 
-  Future<List<String>> readUrlsFromFile(String filePath) async {
+ Future<List<String>> readUrlsFromFile(String filePath) async {
     final file = File(filePath);
     return await file.readAsLines();
   }
@@ -71,7 +87,6 @@ class _DownloadScreenState extends State<DownloadScreen> {
       Response response = await dio.get(url);
       String playlistContent = response.data.toString();
 
-      // Extract .ts segments
       List<String> tsFiles = playlistContent
           .split('\n')
           .where((line) => line.endsWith('.ts'))
@@ -101,7 +116,6 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
         await dio.download(tsUrl, savePath,
             onReceiveProgress: (received, total) {
-          // Update episode-level progress
           setState(() {
             downloadStatuses[index].downloadedTsFiles = i + 1;
             downloadStatuses[index].progress = (i + 1) / tsFiles.length;
@@ -111,10 +125,10 @@ class _DownloadScreenState extends State<DownloadScreen> {
         });
         print('Downloaded $tsUrl');
       }
-setState(() {
+      setState(() {
         downloadStatuses[index].status = 'Downloaded .ts files';
       });
-      return folderPath; // Returning the folder path containing all .ts files
+      return folderPath;
     } catch (e) {
       print('Error downloading .ts files: $e');
       setState(() {
@@ -132,17 +146,15 @@ setState(() {
     }
   }
 
+
   void requestStoragePermission() async {
     if (await Permission.photos.request().isGranted ||
         await Permission.videos.request().isGranted ||
         await Permission.audio.request().isGranted) {
-      // Access granted for media (Android 13+)
       print("Media access granted.");
     } else if (await Permission.manageExternalStorage.request().isGranted) {
-      // Access granted for managing external storage (Android 11+)
       print("Manage external storage granted.");
     } else {
-      // Permission denied
       print("Permissions denied.");
     }
   }
@@ -150,14 +162,11 @@ setState(() {
   Future<void> mergeTsToMkv(
       String folderPath, String outputMkvPath, int index) async {
     Directory dir = Directory(folderPath);
-    var status1 = await Permission.storage.request();
+    await Permission.storage.request();
     requestStoragePermission();
-    final permissionStatus = await Permission.storage.status;
+    await Permission.storage.request();
+    await Permission.manageExternalStorage.request();
 
-    // Ensure the directory exists
-    var status2 = await Permission.storage.request();
-    final exter = await Permission.manageExternalStorage.request();
-    // Check if the directory exists
     bool exists = await dir.exists();
     if (!exists) {
       print("Directory does not exist: $folderPath");
@@ -167,9 +176,8 @@ setState(() {
       return;
     }
 
-    // List all .ts files in the directory
     List<FileSystemEntity> tsFiles = dir
-        .listSync(recursive: true) // Recursively list files in subdirectories
+        .listSync(recursive: true)
         .where((file) => file.path.endsWith('.ts'))
         .toList();
 
@@ -191,24 +199,19 @@ setState(() {
       return;
     }
 
-    // Prepare input file list for ffmpeg
     String inputs = tsFiles.map((file) => 'file ${file.path}').join('\n');
     String inputsFile = '$folderPath/input.txt';
 
-    // Write input file list to a file
     File(inputsFile).writeAsStringSync(inputs);
 
-    // Debugging: Check if the input.txt was created properly
     print("Input.txt created at: $inputsFile with contents:\n$inputs");
 
-    // Use ffmpeg to merge the .ts files into one .mkv
     String command = "-f concat -safe 0 -i $inputsFile -c copy $outputMkvPath";
     setState(() {
       downloadStatuses[index].status = 'Merging...';
     });
 
     await FFmpegKit.execute(command).then((session) async {
-      // Merging process completed
       print("Merging process completed.");
 
       setState(() {
@@ -216,24 +219,20 @@ setState(() {
         downloadStatuses[index].progress = 0.5;
       });
 
-      // Delete .ts files and input.txt after merging
       try {
         print("Deleting .ts files and input.txt...");
 
-        // Delete each .ts file
         for (var file in tsFiles) {
           await file.delete();
           print("Deleted file: ${file.path}");
         }
 
-        // Delete the input.txt file
         File inputsFileToDelete = File(inputsFile);
         if (await inputsFileToDelete.exists()) {
           await inputsFileToDelete.delete();
           print("Deleted input.txt: $inputsFile");
         }
 
-        // Optionally delete the folder itself if it's empty
         if (dir.listSync().isEmpty) {
           await dir.delete();
           print("Deleted folder: $folderPath");
@@ -254,7 +253,6 @@ setState(() {
         print("Error while deleting files: $e");
       }
     }).catchError((error) {
-      // Handle error during merging
       print("Error during merging: $error");
       setState(() {
         downloadStatuses[index].status = 'Error during merging';
@@ -276,61 +274,102 @@ setState(() {
                   progress: 0.0,
                   totalTsFiles: 0,
                   downloadedTsFiles: 0,
-                  episodeNumber: "waiting",
+                  episodeNumber: episode_Name(url),
                 ))
             .toList();
+        //_downloadQueue.addAll(List.generate(urls.length, (index) => index));
       });
+    int initialDownloads = urls.length < maxParallelDownloads
+        ? urls.length
+        : maxParallelDownloads;
 
-      for (int i = 0; i < urls.length; i++) {
-        String m3u8_url = urls[i];
-        String episodeTitle = folderPath.split('/').last;
-        String episodeName = m3u8_url.split('/').last.split('.')[1];
-
-        if (episodeName.contains('original')) {
-          String episode_Name =
-              m3u8_url.split('/').last.split('episode-').last.split('-')[0];
-          episodeName = episode_Name;
-        }
-        String episodeFolderPath = '$folderPath/episode-${episodeName}';
-        Directory(episodeFolderPath).createSync();
-        setState(() {
-          downloadStatuses[i].status = 'Downloading...';
-          downloadStatuses[i].episodeNumber =
-              '${episodeTitle}-episode-${episodeName}.mkv';
-        });
-
-        String outputMkvPath =
-            '$folderPath/${episodeTitle}-episode-${episodeName}.mkv';
-        if (await File(outputMkvPath).exists()) {
-          print('Skipping already downloaded $outputMkvPath');
-          setState(() {
-            downloadStatuses[i].status = 'Already Downloaded';
-            downloadStatuses[i].episodeNumber =
-                '${episodeTitle}-episode-${episodeName}.mkv';
-          });
-           Directory dir = Directory(episodeFolderPath);
-          dir.delete();
-          continue;
-        }
-        // Download and save all .ts files for each episode
-        await downloadM3u8AndSegments(urls[i], episodeFolderPath, i);
-
-        // Merge the .ts files into one .mkv file
-      //  if (downloadStatuses[i].status == "Downloaded .ts files") {
-      //     await mergeTsToMkv(episodeFolderPath, outputMkvPath, i);
-      //   }
- print("Before if: downloadStatuses[$i].status = ${downloadStatuses[i].status}");
-
-      if (downloadStatuses[i].status == "Downloaded .ts files") {
-  print("Inside if: downloadStatuses[$i].status = ${downloadStatuses[i].status}");
-        await mergeTsToMkv(episodeFolderPath, outputMkvPath, i);
-} else {
-  print("Condition false: downloadStatuses[$i].status = ${downloadStatuses[i].status}");
-}
-      }
-
-      print('All episodes downloaded and merged.');
+    for (int i = 0; i < initialDownloads; i++) {
+      _downloadAndMergeEpisode(i);  // Start download immediately
+      downloadStatuses[i].status = '.ts files downloaded'; // Update status
     }
+
+    // Add the remaining episodes to the queue
+    if (urls.length > initialDownloads) {
+      _downloadQueue.addAll(
+          List.generate(urls.length - initialDownloads, (i) => i + initialDownloads));
+    }
+    }
+  }
+
+  String episode_Name(String url) { 
+  
+  String episodeName =url.split('/').last.split('.')[1];
+  String? episodeTitle =selectedFilePath?.split('/').last.split('.').first;
+  return "${episodeTitle}-episode-${episodeName}.mkv";
+  }
+
+  // Function to process the download queue
+  void _processDownloadQueue() {
+    print(_getActiveDownloads());
+    while (_downloadQueue.isNotEmpty &&
+        _getActiveDownloads() < maxParallelDownloads) {
+          print(_downloadQueue.length);
+      int index = _downloadQueue.removeFirst();
+      setState(() {
+        downloadStatuses[index].status = '.ts files downloaded';
+      });
+      _downloadAndMergeEpisode(index);
+    }
+  }
+
+  // Function to get the number of currently active downloads
+  int _getActiveDownloads() {
+    return downloadStatuses.where((status) => status.status.contains('.ts files downloaded')).length;
+  }
+
+  // Function to handle download and merge of a single episode
+  Future<void> _downloadAndMergeEpisode(int index) async {
+    String url = downloadStatuses[index].url;
+    String folderPath = await createFolderForFile(selectedFilePath!); // Ensure folder path is correct
+    String m3u8_url = url;
+    String episodeTitle = folderPath.split('/').last;
+    String episodeName = m3u8_url.split('/').last.split('.')[1];
+
+    if (episodeName.contains('original')) {
+      String episode_Name =
+          m3u8_url.split('/').last.split('episode-').last.split('-')[0];
+      episodeName = episode_Name;
+    }
+    String episodeFolderPath = '$folderPath/episode-${episodeName}';
+    Directory(episodeFolderPath).createSync();
+    setState(() {
+      downloadStatuses[index].status = '.ts files downloaded';
+      downloadStatuses[index].episodeNumber =
+          '${episodeTitle}-episode-${episodeName}.mkv';
+    });
+
+    String outputMkvPath =
+        '$folderPath/${episodeTitle}-episode-${episodeName}.mkv';
+    if (await File(outputMkvPath).exists()) {
+      print('Skipping already downloaded $outputMkvPath');
+      setState(() {
+        downloadStatuses[index].status = 'Already Downloaded';
+        downloadStatuses[index].episodeNumber =
+            '${episodeTitle}-episode-${episodeName}.mkv';
+      });
+      Directory dir = Directory(episodeFolderPath);
+      dir.delete();
+
+      // Start the next download in the queue if available
+      _processDownloadQueue(); 
+      return;
+    }
+    await downloadM3u8AndSegments(url, episodeFolderPath, index);
+
+    if (downloadStatuses[index].status == "Downloaded .ts files") {
+      await mergeTsToMkv(episodeFolderPath, outputMkvPath, index);
+    } else {
+      print(
+          "Condition false: downloadStatuses[$index].status = ${downloadStatuses[index].status}");
+    }
+
+    // Download and merging completed for this episode, start the next
+    _processDownloadQueue();
   }
 
   Future<String> createFolderForFile(String filePath) async {
@@ -360,7 +399,7 @@ setState(() {
               children: [
                 ElevatedButton(
                   onPressed: selectFile,
-                  child: const Text("Select File from Storage"),
+                  child: const Text("Select File"),
                 ),
                 const SizedBox(width: 10),
                 selectedFilePath != null
@@ -381,6 +420,25 @@ setState(() {
                           style: TextStyle(color: Colors.red),
                         ),
                       ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            // Input field for number of parallel downloads
+            Row(
+              children: [
+                const Text('Parallel Downloads:'),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 50,
+                  child: TextField(
+                    controller: _parallelDownloadsController,
+                    keyboardType: TextInputType.number,
+                    maxLength: 1, // Limit input to a single digit
+                    decoration: const InputDecoration(
+                      counterText: "", // Hide the character counter
+                    ),
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 20),
