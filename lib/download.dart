@@ -111,7 +111,9 @@ class _DownloadScreenState extends State<DownloadScreen> {
         });
         print('Downloaded $tsUrl');
       }
-
+setState(() {
+        downloadStatuses[index].status = 'Downloaded .ts files';
+      });
       return folderPath; // Returning the folder path containing all .ts files
     } catch (e) {
       print('Error downloading .ts files: $e');
@@ -306,14 +308,25 @@ class _DownloadScreenState extends State<DownloadScreen> {
             downloadStatuses[i].episodeNumber =
                 '${episodeTitle}-episode-${episodeName}.mkv';
           });
+           Directory dir = Directory(episodeFolderPath);
+          dir.delete();
           continue;
         }
         // Download and save all .ts files for each episode
         await downloadM3u8AndSegments(urls[i], episodeFolderPath, i);
 
         // Merge the .ts files into one .mkv file
+      //  if (downloadStatuses[i].status == "Downloaded .ts files") {
+      //     await mergeTsToMkv(episodeFolderPath, outputMkvPath, i);
+      //   }
+ print("Before if: downloadStatuses[$i].status = ${downloadStatuses[i].status}");
 
+      if (downloadStatuses[i].status == "Downloaded .ts files") {
+  print("Inside if: downloadStatuses[$i].status = ${downloadStatuses[i].status}");
         await mergeTsToMkv(episodeFolderPath, outputMkvPath, i);
+} else {
+  print("Condition false: downloadStatuses[$i].status = ${downloadStatuses[i].status}");
+}
       }
 
       print('All episodes downloaded and merged.');
