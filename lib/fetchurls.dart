@@ -284,6 +284,10 @@ Future<void> saveM3u8Yugen(String baseUrl, String embedBaseUrl, int start,
           "/";
       String? m3u8Url = await getM3u8Yugen(url, episodeNumber, callback);
       if (m3u8Url != null) {
+        if (!m3u8Url.contains('original')) {
+          m3u8Url = m3u8Url.replaceAll(".m3u8", ".1080.m3u8");
+        }
+
         final directory = await getExternalStorageDirectory();
         if (directory != null) {
           final path = directory.parent.parent.parent.parent.path + '/download';
