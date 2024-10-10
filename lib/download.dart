@@ -23,6 +23,7 @@ class DownloadStatus {
   int totalTsFiles;
   int downloadedTsFiles;
   String episodeNumber;
+  bool isPaused;
 
   DownloadStatus({
     required this.url,
@@ -31,11 +32,13 @@ class DownloadStatus {
     required this.totalTsFiles,
     required this.downloadedTsFiles,
     required this.episodeNumber,
+    this.isPaused = false,
   });
 }
 
 class _DownloadScreenState extends State<DownloadScreen> {
   String? selectedFilePath;
+  String? uiselectedFilePath;
   Dio dio = Dio();
   List<DownloadStatus> downloadStatuses = [];
   int maxParallelDownloads = 1;
@@ -48,8 +51,8 @@ class _DownloadScreenState extends State<DownloadScreen> {
     super.initState();
     _parallelDownloadsController.addListener(() {
       setState(() {
-        maxParallelDownloads = int.tryParse(_parallelDownloadsController.text) ??
-            1; 
+        maxParallelDownloads =
+            int.tryParse(_parallelDownloadsController.text) ?? 1;
       });
     });
   }
@@ -60,7 +63,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
     super.dispose();
   }
 
- Future<void> selectFile() async {
+  Future<void> selectFile() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.any,
     );
@@ -68,6 +71,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
     if (result != null) {
       setState(() {
         selectedFilePath = result.files.single.path;
+        uiselectedFilePath = result.files.single.path;
       });
     } else {
       setState(() {
@@ -76,7 +80,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
     }
   }
 
- Future<List<String>> readUrlsFromFile(String filePath) async {
+  Future<List<String>> readUrlsFromFile(String filePath) async {
     final file = File(filePath);
     return await file.readAsLines();
   }
@@ -145,7 +149,6 @@ class _DownloadScreenState extends State<DownloadScreen> {
       }
     }
   }
-
 
   void requestStoragePermission() async {
     if (await Permission.photos.request().isGranted ||
@@ -279,28 +282,27 @@ class _DownloadScreenState extends State<DownloadScreen> {
             .toList();
         //_downloadQueue.addAll(List.generate(urls.length, (index) => index));
       });
-    int initialDownloads = urls.length < maxParallelDownloads
-        ? urls.length
-        : maxParallelDownloads;
+      int initialDownloads = urls.length < maxParallelDownloads
+          ? urls.length
+          : maxParallelDownloads;
 
-    for (int i = 0; i < initialDownloads; i++) {
-      _downloadAndMergeEpisode(i);  // Start download immediately
-      downloadStatuses[i].status = '.ts files downloaded'; // Update status
-    }
+      for (int i = 0; i < initialDownloads; i++) {
+        _downloadAndMergeEpisode(i); // Start download immediately
+        downloadStatuses[i].status = '.ts files downloaded'; // Update status
+      }
 
-    // Add the remaining episodes to the queue
-    if (urls.length > initialDownloads) {
-      _downloadQueue.addAll(
-          List.generate(urls.length - initialDownloads, (i) => i + initialDownloads));
-    }
+      // Add the remaining episodes to the queue
+      if (urls.length > initialDownloads) {
+        _downloadQueue.addAll(List.generate(
+            urls.length - initialDownloads, (i) => i + initialDownloads));
+      }
     }
   }
 
-  String episode_Name(String url) { 
-  
-  String episodeName =url.split('/').last.split('.')[1];
-  String? episodeTitle =selectedFilePath?.split('/').last.split('.').first;
-  return "${episodeTitle}-episode-${episodeName}.mkv";
+  String episode_Name(String url) {
+    String episodeName = url.split('/').last.split('.')[1];
+    String? episodeTitle = selectedFilePath?.split('/').last.split('.').first;
+    return "${episodeTitle}-episode-${episodeName}.mkv";
   }
 
   // Function to process the download queue
@@ -308,7 +310,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
     print(_getActiveDownloads());
     while (_downloadQueue.isNotEmpty &&
         _getActiveDownloads() < maxParallelDownloads) {
-          print(_downloadQueue.length);
+      print(_downloadQueue.length);
       int index = _downloadQueue.removeFirst();
       setState(() {
         downloadStatuses[index].status = '.ts files downloaded';
@@ -319,13 +321,16 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
   // Function to get the number of currently active downloads
   int _getActiveDownloads() {
-    return downloadStatuses.where((status) => status.status.contains('.ts files downloaded')).length;
+    return downloadStatuses
+        .where((status) => status.status.contains('.ts files downloaded'))
+        .length;
   }
 
   // Function to handle download and merge of a single episode
   Future<void> _downloadAndMergeEpisode(int index) async {
     String url = downloadStatuses[index].url;
-    String folderPath = await createFolderForFile(selectedFilePath!); // Ensure folder path is correct
+    String folderPath = await createFolderForFile(
+        selectedFilePath!); // Ensure folder path is correct
     String m3u8_url = url;
     String episodeTitle = folderPath.split('/').last;
     String episodeName = m3u8_url.split('/').last.split('.')[1];
@@ -351,12 +356,13 @@ class _DownloadScreenState extends State<DownloadScreen> {
         downloadStatuses[index].status = 'Already Downloaded';
         downloadStatuses[index].episodeNumber =
             '${episodeTitle}-episode-${episodeName}.mkv';
+        downloadStatuses[index].progress = 100;
       });
       Directory dir = Directory(episodeFolderPath);
       dir.delete();
 
       // Start the next download in the queue if available
-      _processDownloadQueue(); 
+      _processDownloadQueue();
       return;
     }
     await downloadM3u8AndSegments(url, episodeFolderPath, index);
@@ -388,6 +394,140 @@ class _DownloadScreenState extends State<DownloadScreen> {
     return folderPath;
   }
 
+  Future<void> showFileSelectionDialog(BuildContext context) async {
+    String? selectedFileName; // To store and display the file name
+
+    return showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setState) {
+            return AlertDialog(
+              title: const Text('File Selection'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ElevatedButton(
+                    onPressed: () async {
+                      await selectFile();
+                      if (uiselectedFilePath != null &&
+                          uiselectedFilePath!.isNotEmpty) {
+                        // Extract the file name from the file path
+                        selectedFileName = uiselectedFilePath!.split('/').last;
+                      }
+                      // Update the dialog state to display the file name and change button text
+                      setState(() {});
+                    },
+                    child: const Text("Select File"),
+                  ),
+                  const SizedBox(height: 10),
+                  if (selectedFileName != null)
+                    Text(
+                      "Selected File: $selectedFileName", // Show the selected file name
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  const SizedBox(height: 10),
+                  // Display parallel downloads value as non-editable
+                  TextFormField(
+                    initialValue: maxParallelDownloads.toString(),
+                    decoration: const InputDecoration(
+                      labelText: 'Parallel Downloads',
+                    ),
+                    enabled: false, // Make it non-editable
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    // Clear the selected file path when closing the dialog
+                    uiselectedFilePath = "";
+                    Navigator.of(context).pop();
+                  },
+                  child: const Text("Close"),
+                ),
+                TextButton(
+                  onPressed: () {
+                    // Only start download if the file is selected
+                    if (uiselectedFilePath != null &&
+                        uiselectedFilePath!.isNotEmpty) {
+                      downloadFile();
+                      Navigator.of(context)
+                          .pop(); // Close the dialog after starting download
+                    }
+                  },
+                  child: Text(
+                    uiselectedFilePath != null && uiselectedFilePath!.isNotEmpty
+                        ? "Start Download"
+                        : "Select File First",
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // Dialog to update the parallel downloads value
+  Future<void> showParallelDownloadsDialog(BuildContext context) async {
+    return showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setState) {
+            return AlertDialog(
+              title: const Text('Set Parallel Downloads'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        onPressed: () {
+                          if (maxParallelDownloads > 1) {
+                            setState(() {
+                              maxParallelDownloads--;
+                            });
+                          }
+                        },
+                        icon: const Icon(Icons.remove),
+                      ),
+                      Text(
+                        maxParallelDownloads.toString(),
+                        style: const TextStyle(fontSize: 20),
+                      ),
+                      IconButton(
+                        onPressed: () {
+                          if (maxParallelDownloads < 8) {
+                            setState(() {
+                              maxParallelDownloads++;
+                            });
+                          }
+                        },
+                        icon: const Icon(Icons.add),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                  child: const Text("Close"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -395,72 +535,138 @@ class _DownloadScreenState extends State<DownloadScreen> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            Row(
-              children: [
-                ElevatedButton(
-                  onPressed: selectFile,
-                  child: const Text("Select File"),
-                ),
-                const SizedBox(width: 10),
-                selectedFilePath != null
-                    ? Expanded(
-                        child: Text(
-                          selectedFilePath!,
-                          style: const TextStyle(
-                            color: Colors.green,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                        ),
-                      )
-                    : const Expanded(
-                        child: Text(
-                          "No file selected",
-                          style: TextStyle(color: Colors.red),
-                        ),
-                      ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            // Input field for number of parallel downloads
-            Row(
-              children: [
-                const Text('Parallel Downloads:'),
-                const SizedBox(width: 10),
-                SizedBox(
-                  width: 50,
-                  child: TextField(
-                    controller: _parallelDownloadsController,
-                    keyboardType: TextInputType.number,
-                    maxLength: 1, // Limit input to a single digit
-                    decoration: const InputDecoration(
-                      counterText: "", // Hide the character counter
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: selectedFilePath != null ? downloadFile : null,
-              child: const Text("Download and Merge"),
-            ),
             const SizedBox(height: 20),
             Expanded(
               child: ListView.builder(
                 itemCount: downloadStatuses.length,
                 itemBuilder: (context, index) {
                   DownloadStatus status = downloadStatuses[index];
-                  return ListTile(
-                    title: Text("${status.episodeNumber}"),
-                    subtitle: Text(status.status),
-                    trailing: CircularProgressIndicator(
-                      value: status.progress,
+
+                  Color progressColor;
+                  IconData statusIcon;
+
+                  // Check for error in the status
+                  if (status.status.toLowerCase().contains("error") ||
+                      status.status.toLowerCase().contains("720p")) {
+                    progressColor = Colors.redAccent;
+                    statusIcon = Icons.error_outline;
+                  }
+                  // Check if download is complete
+                  else if (status.progress == 1.0) {
+                    progressColor = Colors.lightGreen;
+                    statusIcon = Icons.check_circle_outline;
+                  }
+                  // Download is in progress
+                  else {
+                    progressColor = Colors.lightBlueAccent;
+                    statusIcon = Icons.downloading_outlined;
+                  }
+
+                  // Calculate percentage
+                  String progressPercentage =
+                      (status.progress * 100).toStringAsFixed(1) + "%";
+
+                  return Card(
+                    elevation: 4,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  "Episode ${status.episodeNumber}",
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                              ),
+                              Icon(statusIcon, color: progressColor, size: 28),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+
+                          // Progress bar with percentage display
+                          Row(
+                            children: [
+                              Expanded(
+                                child: LinearProgressIndicator(
+                                  value: status.progress,
+                                  backgroundColor: Colors.grey[300],
+                                  color: progressColor,
+                                  minHeight: 8,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                progressPercentage,
+                                style: TextStyle(
+                                  color: Colors.black87,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          const SizedBox(height: 8),
+
+                          // Displaying status with detailed messages
+                          Text(
+                            status
+                                .status, // This can be "Error downloading .ts files" or "Downgrading to 720p"
+                            style: TextStyle(
+                              color: (status.status
+                                          .toLowerCase()
+                                          .contains("error") ||
+                                      status.status
+                                          .toLowerCase()
+                                          .contains("720p"))
+                                  ? Colors.redAccent
+                                  : Colors.black54,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   );
                 },
               ),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                ElevatedButton(
+                  onPressed: () {
+                    showFileSelectionDialog(context);
+                  },
+                  child: const Icon(Icons.add),
+                  style: ElevatedButton.styleFrom(
+                    shape: const CircleBorder(),
+                    padding: const EdgeInsets.all(14),
+                  ),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    showParallelDownloadsDialog(context);
+                  },
+                  child: const Text('Parallel Downloads'),
+                  style: ElevatedButton.styleFrom(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -468,3 +674,164 @@ class _DownloadScreenState extends State<DownloadScreen> {
     );
   }
 }
+
+// ---------
+//   @override
+//   Widget build(BuildContext context) {
+//     return Scaffold(
+//       body: Padding(
+//         padding: const EdgeInsets.all(16.0),
+//         child: Column(
+//           children: [
+//             const SizedBox(height: 20),
+//             Expanded(
+//               child: ListView.builder(
+//                 itemCount: downloadStatuses.length,
+//                 itemBuilder: (context, index) {
+//                   DownloadStatus status = downloadStatuses[index];
+
+//                   Color progressColor;
+//                   IconData statusIcon;
+
+//                   // Error check
+//                   if (status.status.toLowerCase().contains("error")) {
+//                     progressColor = Colors.redAccent;
+//                     statusIcon = Icons.error_outline;
+//                   }
+//                   // If download is completed
+//                   else if (status.progress == 1.0) {
+//                     progressColor = Colors.lightGreen;
+//                     statusIcon = Icons.check_circle_outline;
+//                   }
+//                   // Ongoing download
+//                   else {
+//                     progressColor = Colors.lightBlueAccent;
+//                     statusIcon = Icons.downloading_outlined;
+//                   }
+
+//                   // Progress percentage calculation
+//                   String progressPercentage =
+//                       (status.progress * 100).toStringAsFixed(1) + "%";
+
+//                   return Neumorphic(
+//                     margin: const EdgeInsets.symmetric(vertical: 10),
+//                     style: NeumorphicStyle(
+//                       depth: -5,
+//                       intensity: 0.8,
+//                       boxShape: NeumorphicBoxShape.roundRect(
+//                           BorderRadius.circular(15)),
+//                       color: Colors.white,
+//                     ),
+//                     child: Padding(
+//                       padding: const EdgeInsets.all(16.0),
+//                       child: Column(
+//                         crossAxisAlignment: CrossAxisAlignment.start,
+//                         children: [
+//                           Row(
+//                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
+//                             children: [
+//                               Expanded(
+//                                 child: Text(
+//                                   "Episode ${status.episodeNumber}",
+//                                   style: const TextStyle(
+//                                     fontWeight: FontWeight.bold,
+//                                     fontSize: 16,
+//                                     color: Colors.black87,
+//                                   ),
+//                                 ),
+//                               ),
+//                               NeumorphicIcon(
+//                                 statusIcon,
+//                                 size: 28,
+//                                 style: NeumorphicStyle(
+//                                   color: progressColor,
+//                                   depth: 4,
+//                                 ),
+//                               ),
+//                             ],
+//                           ),
+//                           const SizedBox(height: 8),
+
+//                           // Progress bar and percentage
+//                           Row(
+//                             children: [
+//                               Expanded(
+//                                 child: NeumorphicProgress(
+//                                   percent: status.progress,
+//                                   height: 8,
+//                                   style: ProgressStyle(
+//                                     accent: progressColor,
+//                                     variant: Colors.grey[300],
+//                                   ),
+//                                 ),
+//                               ),
+//                               const SizedBox(width: 10),
+//                               Text(
+//                                 progressPercentage,
+//                                 style: TextStyle(
+//                                   color: Colors.black87,
+//                                   fontSize: 14,
+//                                   fontWeight: FontWeight.bold,
+//                                 ),
+//                               ),
+//                             ],
+//                           ),
+
+//                           const SizedBox(height: 8),
+
+//                           // Display status message
+//                           Text(
+//                             status
+//                                 .status, // This will show dynamic messages like "Error downloading", "Downgrading"
+//                             style: TextStyle(
+//                               color:
+//                                   status.status.toLowerCase().contains("error")
+//                                       ? Colors.redAccent
+//                                       : Colors.black54,
+//                               fontSize: 14,
+//                             ),
+//                           ),
+//                         ],
+//                       ),
+//                     ),
+//                   );
+//                 },
+//               ),
+//             ),
+//             Row(
+//               mainAxisAlignment: MainAxisAlignment.spaceBetween,
+//               children: [
+//                 NeumorphicButton(
+//                   onPressed: () {
+//                     showFileSelectionDialog(context);
+//                   },
+//                   style: NeumorphicStyle(
+//                     boxShape: NeumorphicBoxShape.circle(),
+//                     depth: 4,
+//                   ),
+//                   padding: const EdgeInsets.all(14),
+//                   child: const Icon(Icons.add),
+//                 ),
+//                 NeumorphicButton(
+//                   onPressed: () {
+//                     showParallelDownloadsDialog(context);
+//                   },
+//                   style: NeumorphicStyle(
+//                     depth: 4,
+//                     boxShape: NeumorphicBoxShape.roundRect(
+//                       BorderRadius.circular(20),
+//                     ),
+//                   ),
+//                   padding:
+//                       const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+//                   child: const Text('Parallel Downloads'),
+//                 ),
+//               ],
+//             ),
+//           ],
+//         ),
+//       ),
+//     );
+//   }
+// }
+
