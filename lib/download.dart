@@ -288,6 +288,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
           setState(() {
             downloadStatuses[index].status = 'Merging is completed';
             downloadStatuses[index].progress = 1.0;
+            downloadStatuses[index].isDownloading = false;
           });
         }
         setState(() {
