@@ -292,7 +292,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
         });
       } catch (e) {
         setState(() {
-          downloadStatuses[index].status = 'Merging is failed';
+          downloadStatuses[index].status = 'Merging is error';
           downloadStatuses[index].progress = 0.0;
         });
         print("Error while deleting files: $e");
@@ -300,7 +300,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
     }).catchError((error) {
       print("Error during merging: $error");
       setState(() {
-        downloadStatuses[index].status = 'Error during merging';
+        downloadStatuses[index].status = 'error during merging';
       });
     });
   }
@@ -412,7 +412,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
         downloadStatuses[index].status = 'Already Downloaded';
         downloadStatuses[index].episodeNumber =
             '${episodeTitle}-episode-${episodeName}.mkv';
-        downloadStatuses[index].progress = 100;
+        downloadStatuses[index].progress = 1.0;
       });
       Directory dir = Directory(episodeFolderPath);
       dir.delete();
@@ -688,12 +688,23 @@ class _DownloadScreenState extends State<DownloadScreen> {
                                     color: Colors.green,
                                   ),
                                 )
-                              else if (status.progress == 1.0)
+                              else if ((status.progress == 1.0 ||
+                                      status.status
+                                          .contains("Already Downloaded")) &&
+                                  !(status.status == "Merging..." ||
+                                      status.status ==
+                                          "Merging is in progress"))
                                 const Icon(
                                   Icons.check_circle_outline,
                                   color: Colors.green,
                                 ) // Show checkmark if completed
-                              else
+                              else if (status.status == "Merging..." ||
+                                  status.status == "Merging is in progress")
+                                Icon(
+                                  Icons.check_circle_outline,
+                                  color: Colors.orange,
+                                )
+                              else if (!status.isPaused)
                                 // Show Pause button if downloading
                                 IconButton(
                                   onPressed: () {
