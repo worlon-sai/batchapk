@@ -1,5 +1,4 @@
 import 'dart:collection';
-
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
@@ -8,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:async';
+import 'downloadFileInfo.dart';
 
 class DownloadScreen extends StatefulWidget {
   const DownloadScreen({Key? key}) : super(key: key);
@@ -16,31 +16,11 @@ class DownloadScreen extends StatefulWidget {
   _DownloadScreenState createState() => _DownloadScreenState();
 }
 
-class DownloadStatus {
-  String url;
-  String status;
-  double progress;
-  int totalTsFiles;
-  int downloadedTsFiles;
-  String episodeNumber;
-  bool isPaused;
-
-  DownloadStatus({
-    required this.url,
-    required this.status,
-    required this.progress,
-    required this.totalTsFiles,
-    required this.downloadedTsFiles,
-    required this.episodeNumber,
-    this.isPaused = false,
-  });
-}
-
 class _DownloadScreenState extends State<DownloadScreen> {
   String? selectedFilePath;
   String? uiselectedFilePath;
   Dio dio = Dio();
-  List<DownloadStatus> downloadStatuses = [];
+  List<DownloadInfo> downloadStatuses = [];
   int maxParallelDownloads = 1;
   final TextEditingController _parallelDownloadsController =
       TextEditingController(text: '1');
@@ -89,6 +69,23 @@ class _DownloadScreenState extends State<DownloadScreen> {
     return await file.readAsLines();
   }
 
+  Future<int> getTotalDownloadSize(List<String> tsFiles, String baseUrl) async {
+    int totalSizeInBytes = 0;
+    for (String tsFile in tsFiles) {
+      String tsUrl = Uri.parse(baseUrl).resolve(tsFile).toString();
+      try {
+        Response response = await dio.head(tsUrl);
+        if (response.statusCode == 200) {
+          totalSizeInBytes +=
+              int.parse(response.headers['content-length']?[0] ?? '0');
+        }
+      } catch (e) {
+        print('Error getting size of $tsUrl: $e');
+      }
+    }
+    return totalSizeInBytes;
+  }
+
   Future<String> downloadM3u8AndSegments(
       String url, String folderPath, int index) async {
     _cancelTokens[index] = CancelToken(); // Create CancelToken for the download
@@ -100,6 +97,13 @@ class _DownloadScreenState extends State<DownloadScreen> {
           .split('\n')
           .where((line) => line.endsWith('.ts'))
           .toList();
+
+      if (downloadStatuses[index].size == 0) {
+        int totalSizeInBytes = await getTotalDownloadSize(tsFiles, url);
+        setState(() {
+          downloadStatuses[index].size = totalSizeInBytes;
+        });
+      }
 
       setState(() {
         downloadStatuses[index].totalTsFiles = tsFiles.length;
@@ -313,14 +317,21 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
       setState(() {
         downloadStatuses = urls
-            .map((url) => DownloadStatus(
+            .map((url) => DownloadInfo(
                   url: url,
                   status: 'Waiting',
                   progress: 0.0,
                   totalTsFiles: 0,
                   downloadedTsFiles: 0,
                   episodeNumber: episode_Name(url),
+                  date: DateTime.now(),
+                  activeTime: Duration.zero,
+                  addedDate: DateTime.now(),
+                  size: 0, // Initialize size to 0
+                  finished: false,
+                  speed: 0.0,
                 ))
+            .cast<DownloadInfo>()
             .toList();
         //_downloadQueue.addAll(List.generate(urls.length, (index) => index));
       });
@@ -330,7 +341,8 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
       for (int i = 0; i < initialDownloads; i++) {
         _startDownload(i); // Start download immediately
-        downloadStatuses[i].status = '.ts files downloaded'; // Update status
+        downloadStatuses[i].status = '.ts files downloaded';
+        downloadStatuses[i].isDownloading = true; // Update status
       }
 
       // Add the remaining episodes to the queue
@@ -357,6 +369,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
       print(_downloadQueue.length);
       int index = _downloadQueue.removeFirst();
       setState(() {
+        downloadStatuses[index].isDownloading = true;
         downloadStatuses[index].status = '.ts files downloaded';
       });
       _startDownload(index);
@@ -370,6 +383,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
         downloadStatuses[index].status = 'Resuming...';
       } else {
         downloadStatuses[index].status = '.ts files downloaded';
+        downloadStatuses[index].isDownloading = true; // Update status
       }
     });
     _downloadAndMergeEpisode(index);
@@ -377,9 +391,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
   // Function to get the number of currently active downloads
   int _getActiveDownloads() {
-    return downloadStatuses
-        .where((status) => status.status.contains('.ts files downloaded'))
-        .length;
+    return downloadStatuses.where((element) => element.isDownloading).length;
   }
 
   // Function to handle download and merge of a single episode
@@ -397,8 +409,13 @@ class _DownloadScreenState extends State<DownloadScreen> {
       episodeName = episode_Name;
     }
     String episodeFolderPath = '$folderPath/episode-${episodeName}';
+    if (downloadStatuses[index].episodeFolderPath == null ||
+        downloadStatuses[index].episodeFolderPath!.length == 0) {
+      downloadStatuses[index].outputMkvPath = episodeFolderPath;
+    }
     Directory(episodeFolderPath).createSync();
     setState(() {
+      downloadStatuses[index].isDownloading = true;
       downloadStatuses[index].status = '.ts files downloaded';
       downloadStatuses[index].episodeNumber =
           '${episodeTitle}-episode-${episodeName}.mkv';
@@ -406,8 +423,13 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
     String outputMkvPath =
         '$folderPath/${episodeTitle}-episode-${episodeName}.mkv';
+    if (downloadStatuses[index].outputMkvPath == null ||
+        downloadStatuses[index].outputMkvPath!.length == 0) {
+      downloadStatuses[index].outputMkvPath = outputMkvPath;
+    }
     if (await File(outputMkvPath).exists()) {
       print('Skipping already downloaded $outputMkvPath');
+
       setState(() {
         downloadStatuses[index].status = 'Already Downloaded';
         downloadStatuses[index].episodeNumber =
@@ -591,6 +613,85 @@ class _DownloadScreenState extends State<DownloadScreen> {
     );
   }
 
+  Widget _getStatusWidget(DownloadInfo status, int index) {
+    // Check for error in the status
+    if (status.status.toLowerCase().contains("error") ||
+        status.status.toLowerCase().contains("720p")) {
+      return IconButton(
+        onPressed: () {
+          // Retry logic (same as play button)
+          setState(() {
+            downloadStatuses[index].isPaused = false;
+            downloadStatuses[index].status = "Waiting...";
+          });
+          _downloadQueue.add(index);
+          _processDownloadQueue();
+        },
+        icon: const Icon(Icons.refresh, color: Colors.blue),
+      );
+    }
+    // Check if download is complete
+    else if (status.progress == 1.0) {
+      return const Icon(
+        Icons.check_circle_outline,
+        color: Colors.green,
+      );
+    }
+    // Download is paused
+    else if (status.isPaused) {
+      return IconButton(
+        onPressed: () {
+          setState(() {
+            downloadStatuses[index].isPaused = false;
+            downloadStatuses[index].status = "Waiting...";
+          });
+          _downloadQueue.add(index);
+          _processDownloadQueue();
+        },
+        icon: const Icon(
+          Icons.play_circle,
+          color: Colors.green,
+        ),
+      );
+    }
+    // Download is in progress
+    else if (!status.isPaused) {
+      return IconButton(
+        onPressed: () {
+          setState(() {
+            downloadStatuses[index].isPaused = true;
+            downloadStatuses[index].isDownloading = false;
+            downloadStatuses[index].status = "Paused";
+          });
+          // Remove the paused download from the queue
+          if (_downloadQueue.contains(index)) {
+            _downloadQueue.remove(index);
+          }
+          // Process the queue to potentially start the next download
+          _processDownloadQueue();
+        },
+        icon: Icon(
+          Icons.pause_circle,
+          color: downloadStatuses[index].status.contains("Waiting")
+              ? Colors.blue
+              : Colors.orange, // Change color to blue when waiting
+        ),
+      );
+    }
+    // Merging in progress
+    else if (status.status == "Merging..." ||
+        status.status == "Merging is in progress") {
+      return Icon(
+        Icons.check_circle_outline,
+        color: Colors.orange,
+      );
+    }
+    // Default case (shouldn't happen, but good practice)
+    else {
+      return const SizedBox(); // Or any other default widget
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -603,7 +704,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
               child: ListView.builder(
                 itemCount: downloadStatuses.length,
                 itemBuilder: (context, index) {
-                  DownloadStatus status = downloadStatuses[index];
+                  DownloadInfo status = downloadStatuses[index];
 
                   Color progressColor;
                   IconData? statusIcon; // Now nullable
@@ -653,82 +754,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
                                 ),
                               ),
                               // Dynamic Status Icon/Button
-                              if (status.status
-                                      .toLowerCase()
-                                      .contains("error") ||
-                                  status.status.toLowerCase().contains("720p"))
-                                IconButton(
-                                  onPressed: () {
-                                    // Retry logic (same as play button)
-                                    setState(() {
-                                      downloadStatuses[index].isPaused = false;
-                                      downloadStatuses[index].status =
-                                          "Waiting...";
-                                    });
-                                    _downloadQueue.add(index);
-                                    _processDownloadQueue();
-                                  },
-                                  icon: const Icon(Icons.refresh,
-                                      color: Colors.blue),
-                                )
-                              else if (status.isPaused)
-                                // Show Play button if paused
-                                IconButton(
-                                  onPressed: () {
-                                    setState(() {
-                                      downloadStatuses[index].isPaused = false;
-                                      downloadStatuses[index].status =
-                                          "Waiting...";
-                                    });
-                                    _downloadQueue.add(index);
-                                    _processDownloadQueue();
-                                  },
-                                  icon: const Icon(
-                                    Icons.play_circle,
-                                    color: Colors.green,
-                                  ),
-                                )
-                              else if ((status.progress == 1.0 ||
-                                      status.status
-                                          .contains("Already Downloaded")) &&
-                                  !(status.status == "Merging..." ||
-                                      status.status ==
-                                          "Merging is in progress"))
-                                const Icon(
-                                  Icons.check_circle_outline,
-                                  color: Colors.green,
-                                ) // Show checkmark if completed
-                              else if (status.status == "Merging..." ||
-                                  status.status == "Merging is in progress")
-                                Icon(
-                                  Icons.check_circle_outline,
-                                  color: Colors.orange,
-                                )
-                              else if (!status.isPaused)
-                                // Show Pause button if downloading
-                                IconButton(
-                                  onPressed: () {
-                                    setState(() {
-                                      downloadStatuses[index].isPaused = true;
-                                      downloadStatuses[index].status = "Paused";
-                                    });
-                                    // Remove the paused download from the queue
-                                    if (_downloadQueue.contains(index)) {
-                                      _downloadQueue.remove(index);
-                                    }
-                                    // Process the queue to potentially start the next download
-                                    _processDownloadQueue();
-                                  },
-                                  icon: Icon(
-                                    Icons.pause_circle,
-                                    color: downloadStatuses[index]
-                                            .status
-                                            .contains("Waiting")
-                                        ? Colors.blue
-                                        : Colors
-                                            .orange, // Change color to blue when waiting
-                                  ),
-                                ),
+                              _getStatusWidget(status, index),
                             ],
                           ),
                           const SizedBox(height: 8),
@@ -760,8 +786,8 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
                           // Displaying status with detailed messages
                           Text(
-                            status
-                                .status, // This can be "Error downloading .ts files" or "Downgrading to 720p"
+                            getDisplayStatus(
+                                status), // This can be "Error downloading .ts files" or "Downgrading to 720p"
                             style: TextStyle(
                               color: (status.status
                                           .toLowerCase()
@@ -812,4 +838,33 @@ class _DownloadScreenState extends State<DownloadScreen> {
       ),
     );
   }
+}
+
+String _formatFileSize(int sizeInBytes) {
+  if (sizeInBytes < 1024) {
+    return '$sizeInBytes B';
+  } else if (sizeInBytes < 1024 * 1024) {
+    return '${(sizeInBytes / 1024).toStringAsFixed(2)} KB';
+  } else if (sizeInBytes < 1024 * 1024 * 1024) {
+    return '${(sizeInBytes / (1024 * 1024)).toStringAsFixed(2)} MB';
+  } else {
+    return '${(sizeInBytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+}
+
+String getDisplayStatus(DownloadInfo status) {
+  return status.status.contains('.ts files downloaded')
+      ? _formatFileSize(status.size) +
+          ' : ' +
+          'Part ' +
+          status.status.split('.ts files downloaded')[0] +
+          ' (' +
+          (status.progress * 100).toStringAsFixed(1) +
+          '%)'
+      : _formatFileSize(status.size) +
+          ' : ' +
+          status.status +
+          ' (' +
+          (status.progress * 100).toStringAsFixed(1) +
+          '%)';
 }
