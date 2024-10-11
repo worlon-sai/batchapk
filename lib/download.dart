@@ -293,6 +293,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
         setState(() {
           downloadStatuses[index].status = 'Merging is completed';
           downloadStatuses[index].progress = 1.0;
+          downloadStatuses[index].isDownloading = false;
         });
       } catch (e) {
         setState(() {
@@ -654,6 +655,14 @@ class _DownloadScreenState extends State<DownloadScreen> {
         ),
       );
     }
+    // Merging in progress
+    else if (status.status == "Merging..." ||
+        status.status == "Merging is in progress") {
+      return Icon(
+        Icons.check_circle_outline,
+        color: Colors.orange,
+      );
+    }
     // Download is in progress
     else if (!status.isPaused) {
       return IconButton(
@@ -678,14 +687,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
         ),
       );
     }
-    // Merging in progress
-    else if (status.status == "Merging..." ||
-        status.status == "Merging is in progress") {
-      return Icon(
-        Icons.check_circle_outline,
-        color: Colors.orange,
-      );
-    }
+
     // Default case (shouldn't happen, but good practice)
     else {
       return const SizedBox(); // Or any other default widget
