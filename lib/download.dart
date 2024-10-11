@@ -44,7 +44,8 @@ class _DownloadScreenState extends State<DownloadScreen> {
   int maxParallelDownloads = 1;
   final TextEditingController _parallelDownloadsController =
       TextEditingController(text: '1');
-  final Queue<int> _downloadQueue = Queue<int>(); // Queue to manage downloads
+  final Queue<int> _downloadQueue = Queue<int>();
+  final Map<int, CancelToken> _cancelTokens = {};
 
   @override
   void initState() {
@@ -60,6 +61,9 @@ class _DownloadScreenState extends State<DownloadScreen> {
   @override
   void dispose() {
     _parallelDownloadsController.dispose();
+    for (var token in _cancelTokens.values) {
+      token.cancel();
+    }
     super.dispose();
   }
 
@@ -87,8 +91,9 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
   Future<String> downloadM3u8AndSegments(
       String url, String folderPath, int index) async {
+    _cancelTokens[index] = CancelToken(); // Create CancelToken for the download
     try {
-      Response response = await dio.get(url);
+      Response response = await dio.get(url, cancelToken: _cancelTokens[index]);
       String playlistContent = response.data.toString();
 
       List<String> tsFiles = playlistContent
@@ -103,6 +108,13 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
       // Download each segment
       for (int i = 0; i < tsFiles.length; i++) {
+        // Check if the download is paused
+        if (downloadStatuses[index].isPaused) {
+          print("Download paused for episode ${index + 1}");
+          _cancelTokens[index]
+              ?.cancel("Download Paused"); // Cancel the download
+          return "";
+        }
         String tsUrl = Uri.parse(url).resolve(tsFiles[i]).toString();
         String savePath = '$folderPath/segment-$i.ts';
 
@@ -119,7 +131,16 @@ class _DownloadScreenState extends State<DownloadScreen> {
         }
 
         await dio.download(tsUrl, savePath,
+            cancelToken: _cancelTokens[index], // Use the download's CancelToken
             onReceiveProgress: (received, total) {
+          // Check if the download is paused
+          if (downloadStatuses[index].isPaused) {
+            print("Download paused for episode ${index + 1}");
+            _cancelTokens[index]
+                ?.cancel("Download Paused"); // Cancel the download
+            return;
+          }
+
           setState(() {
             downloadStatuses[index].downloadedTsFiles = i + 1;
             downloadStatuses[index].progress = (i + 1) / tsFiles.length;
@@ -134,17 +155,38 @@ class _DownloadScreenState extends State<DownloadScreen> {
       });
       return folderPath;
     } catch (e) {
+      if (e is DioError && e.type == DioErrorType.cancel) {
+        // Handle cancellation (e.g., update status to "Paused")
+        print('Download canceled');
+        setState(() {
+          downloadStatuses[index].status = 'Paused';
+        });
+      }
       print('Error downloading .ts files: $e');
       setState(() {
         downloadStatuses[index].status = 'Error downloading .ts files';
       });
-      setState(() {
-        downloadStatuses[index].status = 'downgrading to 720p';
-      });
+
+      if (downloadStatuses[index].isPaused) {
+        setState(() {
+          downloadStatuses[index].status = 'Paused';
+        });
+      } else {
+        setState(() {
+          downloadStatuses[index].status = 'downgrading to 720p';
+        });
+      }
       if (url.contains('1080')) {
         return downloadM3u8AndSegments(
             url.replaceAll('1080.m3u8', '720.m3u8'), folderPath, index);
       } else {
+        if (e is DioError && e.type == DioErrorType.cancel) {
+          // Handle cancellation (e.g., update status to "Paused")
+          print('Download canceled');
+          setState(() {
+            downloadStatuses[index].status = 'Paused';
+          });
+        }
         return '';
       }
     }
@@ -287,7 +329,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
           : maxParallelDownloads;
 
       for (int i = 0; i < initialDownloads; i++) {
-        _downloadAndMergeEpisode(i); // Start download immediately
+        _startDownload(i); // Start download immediately
         downloadStatuses[i].status = '.ts files downloaded'; // Update status
       }
 
@@ -307,7 +349,9 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
   // Function to process the download queue
   void _processDownloadQueue() {
-    print(_getActiveDownloads());
+    if (_downloadQueue.isEmpty) {
+      return; // Nothing to download
+    }
     while (_downloadQueue.isNotEmpty &&
         _getActiveDownloads() < maxParallelDownloads) {
       print(_downloadQueue.length);
@@ -315,8 +359,20 @@ class _DownloadScreenState extends State<DownloadScreen> {
       setState(() {
         downloadStatuses[index].status = '.ts files downloaded';
       });
-      _downloadAndMergeEpisode(index);
+      _startDownload(index);
     }
+  }
+
+  void _startDownload(int index) {
+    setState(() {
+      downloadStatuses[index].isPaused = false;
+      if (downloadStatuses[index].status == 'Paused') {
+        downloadStatuses[index].status = 'Resuming...';
+      } else {
+        downloadStatuses[index].status = '.ts files downloaded';
+      }
+    });
+    _downloadAndMergeEpisode(index);
   }
 
   // Function to get the number of currently active downloads
@@ -365,6 +421,13 @@ class _DownloadScreenState extends State<DownloadScreen> {
       _processDownloadQueue();
       return;
     }
+
+    if (downloadStatuses[index].isPaused) {
+      print("Download paused for episode ${index + 1}");
+      _cancelTokens[index]?.cancel("Download Paused"); // Cancel the download
+      return;
+    }
+
     await downloadM3u8AndSegments(url, episodeFolderPath, index);
 
     if (downloadStatuses[index].status == "Downloaded .ts files") {
@@ -581,7 +644,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
                             children: [
                               Expanded(
                                 child: Text(
-                                  "Episode ${status.episodeNumber}",
+                                  "${status.episodeNumber}",
                                   style: const TextStyle(
                                     fontWeight: FontWeight.bold,
                                     fontSize: 16,
@@ -635,6 +698,60 @@ class _DownloadScreenState extends State<DownloadScreen> {
                               fontSize: 14,
                             ),
                           ),
+                          // Add Pause/Resume buttons to your Card
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                            children: [
+                              // Pause Button
+                              IconButton(
+                                onPressed: status.isPaused
+                                    ? null // Disable if already paused
+                                    : () {
+                                        setState(() {
+                                          downloadStatuses[index].isPaused =
+                                              true;
+                                          downloadStatuses[index].status =
+                                              "Paused";
+                                        });
+                                        // Add the paused download back to the queue
+
+                                        _processDownloadQueue(); // Start the next download
+                                      },
+                                icon: Icon(
+                                  Icons.pause_circle,
+                                  color: status.isPaused
+                                      ? Colors.grey
+                                      : Colors.orange,
+                                ),
+                              ),
+
+                              // Resume Button
+                              IconButton(
+                                onPressed: !status.isPaused
+                                    ? null // Disable if not paused
+                                    : downloadStatuses[index].status ==
+                                            "Waiting..."
+                                        ? null
+                                        : () {
+                                            setState(() {
+                                              downloadStatuses[index].isPaused =
+                                                  false;
+                                              downloadStatuses[index].status =
+                                                  "Waiting...";
+                                            });
+                                            // Remove the paused download from the queue
+                                            _downloadQueue.add(index);
+                                            _processDownloadQueue();
+                                          },
+                                icon: Icon(
+                                  Icons.play_circle,
+                                  color: !status.isPaused
+                                      ? Colors.grey
+                                      : Colors.green,
+                                ),
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                     ),
@@ -674,164 +791,3 @@ class _DownloadScreenState extends State<DownloadScreen> {
     );
   }
 }
-
-// ---------
-//   @override
-//   Widget build(BuildContext context) {
-//     return Scaffold(
-//       body: Padding(
-//         padding: const EdgeInsets.all(16.0),
-//         child: Column(
-//           children: [
-//             const SizedBox(height: 20),
-//             Expanded(
-//               child: ListView.builder(
-//                 itemCount: downloadStatuses.length,
-//                 itemBuilder: (context, index) {
-//                   DownloadStatus status = downloadStatuses[index];
-
-//                   Color progressColor;
-//                   IconData statusIcon;
-
-//                   // Error check
-//                   if (status.status.toLowerCase().contains("error")) {
-//                     progressColor = Colors.redAccent;
-//                     statusIcon = Icons.error_outline;
-//                   }
-//                   // If download is completed
-//                   else if (status.progress == 1.0) {
-//                     progressColor = Colors.lightGreen;
-//                     statusIcon = Icons.check_circle_outline;
-//                   }
-//                   // Ongoing download
-//                   else {
-//                     progressColor = Colors.lightBlueAccent;
-//                     statusIcon = Icons.downloading_outlined;
-//                   }
-
-//                   // Progress percentage calculation
-//                   String progressPercentage =
-//                       (status.progress * 100).toStringAsFixed(1) + "%";
-
-//                   return Neumorphic(
-//                     margin: const EdgeInsets.symmetric(vertical: 10),
-//                     style: NeumorphicStyle(
-//                       depth: -5,
-//                       intensity: 0.8,
-//                       boxShape: NeumorphicBoxShape.roundRect(
-//                           BorderRadius.circular(15)),
-//                       color: Colors.white,
-//                     ),
-//                     child: Padding(
-//                       padding: const EdgeInsets.all(16.0),
-//                       child: Column(
-//                         crossAxisAlignment: CrossAxisAlignment.start,
-//                         children: [
-//                           Row(
-//                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
-//                             children: [
-//                               Expanded(
-//                                 child: Text(
-//                                   "Episode ${status.episodeNumber}",
-//                                   style: const TextStyle(
-//                                     fontWeight: FontWeight.bold,
-//                                     fontSize: 16,
-//                                     color: Colors.black87,
-//                                   ),
-//                                 ),
-//                               ),
-//                               NeumorphicIcon(
-//                                 statusIcon,
-//                                 size: 28,
-//                                 style: NeumorphicStyle(
-//                                   color: progressColor,
-//                                   depth: 4,
-//                                 ),
-//                               ),
-//                             ],
-//                           ),
-//                           const SizedBox(height: 8),
-
-//                           // Progress bar and percentage
-//                           Row(
-//                             children: [
-//                               Expanded(
-//                                 child: NeumorphicProgress(
-//                                   percent: status.progress,
-//                                   height: 8,
-//                                   style: ProgressStyle(
-//                                     accent: progressColor,
-//                                     variant: Colors.grey[300],
-//                                   ),
-//                                 ),
-//                               ),
-//                               const SizedBox(width: 10),
-//                               Text(
-//                                 progressPercentage,
-//                                 style: TextStyle(
-//                                   color: Colors.black87,
-//                                   fontSize: 14,
-//                                   fontWeight: FontWeight.bold,
-//                                 ),
-//                               ),
-//                             ],
-//                           ),
-
-//                           const SizedBox(height: 8),
-
-//                           // Display status message
-//                           Text(
-//                             status
-//                                 .status, // This will show dynamic messages like "Error downloading", "Downgrading"
-//                             style: TextStyle(
-//                               color:
-//                                   status.status.toLowerCase().contains("error")
-//                                       ? Colors.redAccent
-//                                       : Colors.black54,
-//                               fontSize: 14,
-//                             ),
-//                           ),
-//                         ],
-//                       ),
-//                     ),
-//                   );
-//                 },
-//               ),
-//             ),
-//             Row(
-//               mainAxisAlignment: MainAxisAlignment.spaceBetween,
-//               children: [
-//                 NeumorphicButton(
-//                   onPressed: () {
-//                     showFileSelectionDialog(context);
-//                   },
-//                   style: NeumorphicStyle(
-//                     boxShape: NeumorphicBoxShape.circle(),
-//                     depth: 4,
-//                   ),
-//                   padding: const EdgeInsets.all(14),
-//                   child: const Icon(Icons.add),
-//                 ),
-//                 NeumorphicButton(
-//                   onPressed: () {
-//                     showParallelDownloadsDialog(context);
-//                   },
-//                   style: NeumorphicStyle(
-//                     depth: 4,
-//                     boxShape: NeumorphicBoxShape.roundRect(
-//                       BorderRadius.circular(20),
-//                     ),
-//                   ),
-//                   padding:
-//                       const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
-//                   child: const Text('Parallel Downloads'),
-//                 ),
-//               ],
-//             ),
-//           ],
-//         ),
-//       ),
-//     );
-//   }
-// }
-
