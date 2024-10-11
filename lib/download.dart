@@ -352,7 +352,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
     if (_downloadQueue.isEmpty) {
       return; // Nothing to download
     }
-    while (_downloadQueue.isNotEmpty &&
+    if (_downloadQueue.isNotEmpty &&
         _getActiveDownloads() < maxParallelDownloads) {
       print(_downloadQueue.length);
       int index = _downloadQueue.removeFirst();
@@ -606,7 +606,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
                   DownloadStatus status = downloadStatuses[index];
 
                   Color progressColor;
-                  IconData statusIcon;
+                  IconData? statusIcon; // Now nullable
 
                   // Check for error in the status
                   if (status.status.toLowerCase().contains("error") ||
@@ -619,10 +619,10 @@ class _DownloadScreenState extends State<DownloadScreen> {
                     progressColor = Colors.lightGreen;
                     statusIcon = Icons.check_circle_outline;
                   }
-                  // Download is in progress
+                  // Download is in progress or paused, we'll use buttons
                   else {
                     progressColor = Colors.lightBlueAccent;
-                    statusIcon = Icons.downloading_outlined;
+                    statusIcon = null; // No icon, we'll use buttons
                   }
 
                   // Calculate percentage
@@ -652,7 +652,72 @@ class _DownloadScreenState extends State<DownloadScreen> {
                                   ),
                                 ),
                               ),
-                              Icon(statusIcon, color: progressColor, size: 28),
+                              // Dynamic Status Icon/Button
+                              if (status.status
+                                      .toLowerCase()
+                                      .contains("error") ||
+                                  status.status.toLowerCase().contains("720p"))
+                                IconButton(
+                                  onPressed: () {
+                                    // Retry logic (same as play button)
+                                    setState(() {
+                                      downloadStatuses[index].isPaused = false;
+                                      downloadStatuses[index].status =
+                                          "Waiting...";
+                                    });
+                                    _downloadQueue.add(index);
+                                    _processDownloadQueue();
+                                  },
+                                  icon: const Icon(Icons.refresh,
+                                      color: Colors.blue),
+                                )
+                              else if (status.isPaused)
+                                // Show Play button if paused
+                                IconButton(
+                                  onPressed: () {
+                                    setState(() {
+                                      downloadStatuses[index].isPaused = false;
+                                      downloadStatuses[index].status =
+                                          "Waiting...";
+                                    });
+                                    _downloadQueue.add(index);
+                                    _processDownloadQueue();
+                                  },
+                                  icon: const Icon(
+                                    Icons.play_circle,
+                                    color: Colors.green,
+                                  ),
+                                )
+                              else if (status.progress == 1.0)
+                                const Icon(
+                                  Icons.check_circle_outline,
+                                  color: Colors.green,
+                                ) // Show checkmark if completed
+                              else
+                                // Show Pause button if downloading
+                                IconButton(
+                                  onPressed: () {
+                                    setState(() {
+                                      downloadStatuses[index].isPaused = true;
+                                      downloadStatuses[index].status = "Paused";
+                                    });
+                                    // Remove the paused download from the queue
+                                    if (_downloadQueue.contains(index)) {
+                                      _downloadQueue.remove(index);
+                                    }
+                                    // Process the queue to potentially start the next download
+                                    _processDownloadQueue();
+                                  },
+                                  icon: Icon(
+                                    Icons.pause_circle,
+                                    color: downloadStatuses[index]
+                                            .status
+                                            .contains("Waiting")
+                                        ? Colors.blue
+                                        : Colors
+                                            .orange, // Change color to blue when waiting
+                                  ),
+                                ),
                             ],
                           ),
                           const SizedBox(height: 8),
@@ -697,60 +762,6 @@ class _DownloadScreenState extends State<DownloadScreen> {
                                   : Colors.black54,
                               fontSize: 14,
                             ),
-                          ),
-                          // Add Pause/Resume buttons to your Card
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              // Pause Button
-                              IconButton(
-                                onPressed: status.isPaused
-                                    ? null // Disable if already paused
-                                    : () {
-                                        setState(() {
-                                          downloadStatuses[index].isPaused =
-                                              true;
-                                          downloadStatuses[index].status =
-                                              "Paused";
-                                        });
-                                        // Add the paused download back to the queue
-
-                                        _processDownloadQueue(); // Start the next download
-                                      },
-                                icon: Icon(
-                                  Icons.pause_circle,
-                                  color: status.isPaused
-                                      ? Colors.grey
-                                      : Colors.orange,
-                                ),
-                              ),
-
-                              // Resume Button
-                              IconButton(
-                                onPressed: !status.isPaused
-                                    ? null // Disable if not paused
-                                    : downloadStatuses[index].status ==
-                                            "Waiting..."
-                                        ? null
-                                        : () {
-                                            setState(() {
-                                              downloadStatuses[index].isPaused =
-                                                  false;
-                                              downloadStatuses[index].status =
-                                                  "Waiting...";
-                                            });
-                                            // Remove the paused download from the queue
-                                            _downloadQueue.add(index);
-                                            _processDownloadQueue();
-                                          },
-                                icon: Icon(
-                                  Icons.play_circle,
-                                  color: !status.isPaused
-                                      ? Colors.grey
-                                      : Colors.green,
-                                ),
-                              ),
-                            ],
                           ),
                         ],
                       ),
