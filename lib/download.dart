@@ -10,15 +10,27 @@ import 'dart:async';
 import 'downloadFile.repository.dart';
 import 'downloadFileInfo.dart';
 import 'package:path/path.dart' as path;
+import 'main.dart';
 
 class DownloadScreen extends StatefulWidget {
-  const DownloadScreen({Key? key}) : super(key: key);
+  final Function(DownloadAction, {List<int>? ids})?
+      onDownloadAction; // Callback
+  final Function(int?)? onShowIcon;
+  final bool showDeleteIcon;
 
+  const DownloadScreen({
+    Key? key,
+    this.onDownloadAction,
+    this.onShowIcon,
+    required this.showDeleteIcon,
+  }) : super(key: key);
   @override
-  _DownloadScreenState createState() => _DownloadScreenState();
+  DownloadScreenState createState() => DownloadScreenState();
 }
 
-class _DownloadScreenState extends State<DownloadScreen> {
+enum DownloadFilter { Downloading, Downloaded, All }
+
+class DownloadScreenState extends State<DownloadScreen> {
   String? selectedFilePath;
   String? uiselectedFilePath;
   Dio dio = Dio();
@@ -29,6 +41,10 @@ class _DownloadScreenState extends State<DownloadScreen> {
   final Queue<int> _downloadQueue = Queue<int>();
   final Map<int, CancelToken> _cancelTokens = {};
   final dbHelper = DatabaseHelper();
+  bool _showDeleteIcon = false;
+  List<int> _selectedCardIds = [];
+  DownloadFilter _selectedFilter = DownloadFilter.All;
+  bool _selectAll = false;
 
   @override
   void initState() {
@@ -51,6 +67,12 @@ class _DownloadScreenState extends State<DownloadScreen> {
     super.dispose();
   }
 
+  void _deleteDownloads() {
+// Suggested code may be subject to a license. Learn more: ~LicenseLog:4073815592.
+    widget.onShowIcon?.call(null);
+    widget.onDownloadAction?.call(DownloadAction.delete, ids: _selectedCardIds);
+  }
+
   Future<void> _initializeDownloads() async {
     int downloading = _getActiveDownloads();
     downloadStatuses = await getAllDownloads();
@@ -60,7 +82,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
     for (var download in downloadStatuses) {
       if (!download.finished && !download.isPaused) {
         if (download.isDownloading) {
-          if (downloading <= maxParallelDownloads) {
+          if (downloading < maxParallelDownloads) {
             _startDownload(downloadStatuses.indexOf(download));
             downloading++;
           }
@@ -528,6 +550,113 @@ class _DownloadScreenState extends State<DownloadScreen> {
     return folderPath;
   }
 
+  List<DownloadInfo> getFilteredDownloads() {
+    switch (_selectedFilter) {
+      case DownloadFilter.Downloading:
+        return downloadStatuses
+            .where((status) => status.isDownloading && status.progress < 1.0)
+            .toList();
+      case DownloadFilter.Downloaded:
+        return downloadStatuses
+            .where((status) => status.progress == 1.0)
+            .toList();
+      case DownloadFilter.All:
+      default:
+        return downloadStatuses;
+    }
+  }
+
+  void StartAll() {
+    int activedownloads = _getActiveDownloads();
+    for (var download in downloadStatuses) {
+      if (!download.finished && download.isPaused) {
+        download.isPaused = false;
+        download.status = "Waiting...";
+        if (activedownloads < maxParallelDownloads) {
+          _startDownload(downloadStatuses.indexOf(download));
+          activedownloads++;
+        } else {
+          download.isDownloading = false;
+          _downloadQueue.add(downloadStatuses.indexOf(download));
+          _processDownloadQueue();
+        }
+      }
+      updateDownloadInfoDb(download);
+    }
+    setState(() {});
+  }
+
+  void StopAll() {
+    for (var download in downloadStatuses) {
+      if (!download.finished &&
+          (download.isDownloading || !download.isPaused)) {
+        download.isPaused = true;
+        download.status = "Paused";
+        download.isDownloading = false;
+        _downloadQueue.remove(downloadStatuses.indexOf(download));
+        _processDownloadQueue();
+      }
+      updateDownloadInfoDb(download);
+    }
+    setState(() {});
+  }
+
+  Future<void> Delete() async {
+    for (var Id in _selectedCardIds) {
+      setState(() {
+        downloadStatuses.firstWhere((e) => e.id == Id).status = "Deleting...";
+      });
+      var deletedownload = downloadStatuses.firstWhere((e) => e.id == Id);
+      deletedownload.status = "Deleting...";
+      deletedownload.isPaused = true;
+      deletedownload.isDownloading = false;
+      deletedownload.progress = 0.0;
+      var isupdated = updateDownloadInfoDb(deletedownload);
+      setState(() {});
+      Directory(deletedownload.episodeFolderPath).deleteSync(recursive: true);
+      Directory dir = Directory(deletedownload.episodeFolderPath);
+      dir.delete();
+      await dbHelper.deleteDownload(Id);
+      setState(() {
+        downloadStatuses.removeAt(downloadStatuses.indexOf(deletedownload));
+      });
+      _selectedCardIds = [];
+    }
+  }
+
+  void _toggleCardSelection(int id) {
+    if (_selectedCardIds.contains(id)) {
+      _selectedCardIds.remove(id);
+      _selectAll = false; // Uncheck "Select All" if an item is deselected
+    } else {
+      _selectedCardIds.add(id);
+      // Check if all filtered items are selected
+      _selectAll = _selectedCardIds.length == getFilteredDownloads().length;
+    }
+    _showDeleteIcon = _selectedCardIds.isNotEmpty;
+    _deleteDownloads();
+  }
+
+  Widget _buildSelectAllChip() {
+    return FilterChip(
+      label: Text(_selectAll ? 'Deselect All' : 'Select All'),
+      selected: _selectAll,
+      onSelected: (selected) {
+        setState(() {
+          _selectAll = selected;
+          _selectedCardIds = selected
+              ? getFilteredDownloads()
+                  .map((status) => status.id)
+                  .whereType<int>() // Filter out null values
+                  .toList()
+              : [];
+          _showDeleteIcon = _selectedCardIds.isNotEmpty;
+          _deleteDownloads();
+        });
+      },
+    );
+  }
+
   Future<void> showFileSelectionDialog(BuildContext context) async {
     String? selectedFileName; // To store and display the file name
 
@@ -744,46 +873,101 @@ class _DownloadScreenState extends State<DownloadScreen> {
     }
   }
 
+  Widget _buildFilterChip(DownloadFilter filter) {
+    return FilterChip(
+      label: Text(filter.name),
+      selected: _selectedFilter == filter,
+      onSelected: (selected) {
+        setState(() {
+          _selectedFilter = filter;
+          List<int> newIds = getFilteredDownloads()
+              .map((status) => status.id)
+              .whereType<int>() // Filter out null values
+              .toList();
+          _selectedCardIds.removeWhere((id) => !newIds.contains(id));
+          if (_selectAll) {
+            // If the filter is selected
+            _selectedCardIds = getFilteredDownloads()
+                .map((status) => status.id)
+                .whereType<int>() // Filter out null values
+                .toList();
+            if (_selectedCardIds.length == 0) {
+              _selectAll = false;
+            }
+          }
+          _deleteDownloads();
+        });
+        // You may want to update your downloadStatuses based on the filter here
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            const SizedBox(height: 20),
-            Expanded(
-              child: ListView.builder(
-                itemCount: downloadStatuses.length,
-                itemBuilder: (context, index) {
-                  DownloadInfo status = downloadStatuses[index];
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Wrap(
+              spacing: 8.0,
+              children: [
+                _buildFilterChip(DownloadFilter.All),
+                _buildFilterChip(DownloadFilter.Downloading),
+                _buildFilterChip(DownloadFilter.Downloaded),
+                _buildSelectAllChip(),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              itemCount: getFilteredDownloads().length, // Use filtered list
+              itemBuilder: (context, index) {
+                final status = getFilteredDownloads()[index];
+                Color cardBackgroundColor = _selectedCardIds.contains(status.id)
+                    ? Colors.grey[300]! // Highlighted when selected
+                    : Colors.white;
+                Color progressColor;
+                IconData? statusIcon;
+                // Check for error in the status
+                if (status.status.toLowerCase().contains("error") ||
+                    status.status.toLowerCase().contains("720p")) {
+                  progressColor = Colors.redAccent;
+                  statusIcon = Icons.error_outline;
+                }
+                // Check if download is complete
+                else if (status.progress == 1.0) {
+                  progressColor = Colors.lightGreen;
+                  statusIcon = Icons.check_circle_outline;
+                }
+                // Download is in progress or paused, we'll use buttons
+                else {
+                  progressColor = Colors.lightBlueAccent;
+                  statusIcon = null; // No icon, we'll use buttons
+                }
 
-                  Color progressColor;
-                  IconData? statusIcon; // Now nullable
+                // Calculate percentage
+                String progressPercentage =
+                    (status.progress * 100).toStringAsFixed(1) + "%";
 
-                  // Check for error in the status
-                  if (status.status.toLowerCase().contains("error") ||
-                      status.status.toLowerCase().contains("720p")) {
-                    progressColor = Colors.redAccent;
-                    statusIcon = Icons.error_outline;
-                  }
-                  // Check if download is complete
-                  else if (status.progress == 1.0) {
-                    progressColor = Colors.lightGreen;
-                    statusIcon = Icons.check_circle_outline;
-                  }
-                  // Download is in progress or paused, we'll use buttons
-                  else {
-                    progressColor = Colors.lightBlueAccent;
-                    statusIcon = null; // No icon, we'll use buttons
-                  }
-
-                  // Calculate percentage
-                  String progressPercentage =
-                      (status.progress * 100).toStringAsFixed(1) + "%";
-
-                  return Card(
+                return GestureDetector(
+                  onTap: () {
+                    // <-- Add onTap handler here
+                    if (_showDeleteIcon) {
+                      // <-- Only allow selection in delete mode
+                      setState(() {
+                        _toggleCardSelection(status.id ?? 0);
+                      });
+                    }
+                  },
+                  onLongPress: () {
+                    setState(() {
+                      _toggleCardSelection(status.id ?? 0);
+                    });
+                  },
+                  child: Card(
                     elevation: 4,
+                    color: cardBackgroundColor, // Apply background color
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(15),
                     ),
@@ -805,13 +989,10 @@ class _DownloadScreenState extends State<DownloadScreen> {
                                   ),
                                 ),
                               ),
-                              // Dynamic Status Icon/Button
                               _getStatusWidget(status, index),
                             ],
                           ),
                           const SizedBox(height: 8),
-
-                          // Progress bar with percentage display
                           Row(
                             children: [
                               Expanded(
@@ -833,13 +1014,9 @@ class _DownloadScreenState extends State<DownloadScreen> {
                               ),
                             ],
                           ),
-
                           const SizedBox(height: 8),
-
-                          // Displaying status with detailed messages
                           Text(
-                            getDisplayStatus(
-                                status), // This can be "Error downloading .ts files" or "Downgrading to 720p"
+                            getDisplayStatus(status),
                             style: TextStyle(
                               color: (status.status
                                           .toLowerCase()
@@ -855,38 +1032,38 @@ class _DownloadScreenState extends State<DownloadScreen> {
                         ],
                       ),
                     ),
-                  );
+                  ),
+                );
+              },
+            ),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              ElevatedButton(
+                onPressed: () {
+                  showFileSelectionDialog(context);
                 },
+                child: const Icon(Icons.add),
+                style: ElevatedButton.styleFrom(
+                  shape: const CircleBorder(),
+                  padding: const EdgeInsets.all(14),
+                ),
               ),
-            ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                ElevatedButton(
-                  onPressed: () {
-                    showFileSelectionDialog(context);
-                  },
-                  child: const Icon(Icons.add),
-                  style: ElevatedButton.styleFrom(
-                    shape: const CircleBorder(),
-                    padding: const EdgeInsets.all(14),
+              ElevatedButton(
+                onPressed: () {
+                  showParallelDownloadsDialog(context);
+                },
+                child: const Text('Parallel Downloads'),
+                style: ElevatedButton.styleFrom(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
                   ),
                 ),
-                ElevatedButton(
-                  onPressed: () {
-                    showParallelDownloadsDialog(context);
-                  },
-                  child: const Text('Parallel Downloads'),
-                  style: ElevatedButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
