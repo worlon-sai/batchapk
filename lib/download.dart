@@ -436,9 +436,10 @@ class DownloadScreenState extends State<DownloadScreen> {
             download.progress = inserted.progress;
           }
         } else {
-          download.id = isExisting.id;
-          download.size = isExisting.size;
-          download.progress = isExisting.progress;
+          download = isExisting;
+          // download.id = isExisting.id;
+          // download.size = isExisting.size;
+          // download.progress = isExisting.progress;
         }
       }
       _initializeDownloads();
