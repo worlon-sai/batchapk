@@ -12,7 +12,7 @@ class DownloadInfo {
   DateTime date;
   Duration activeTime;
   DateTime? completedDate;
-  String? outputMkvPath;
+  String outputMkvPath;
   DateTime addedDate;
   int size;
   bool finished;
@@ -32,7 +32,7 @@ class DownloadInfo {
     required this.date,
     required this.activeTime,
     this.completedDate,
-    this.outputMkvPath,
+    this.outputMkvPath = '',
     required this.addedDate,
     this.size = 10,
     this.finished = false,
@@ -50,7 +50,7 @@ class DownloadInfo {
       'downloadedTsFiles': downloadedTsFiles,
       'episodeNumber': episodeNumber,
       'isPaused': isPaused ? 1 : 0,
-      'isDowonloading': isDownloading ? 1 : 0, // Store boolean as integer
+      'isDownloading': isDownloading ? 1 : 0, // Store boolean as integer
       'episodeFolderPath': episodeFolderPath,
       'date': date.toIso8601String(),
       'activeTime': activeTime.inMicroseconds,
@@ -75,7 +75,7 @@ class DownloadInfo {
       episodeNumber: map['episodeNumber'],
       isPaused: map['isPaused'] == 1,
       isDownloading:
-          map['isDowonloading'] == 1, // Convert integer back to boolean
+          map['isDownloading'] == 1, // Convert integer back to boolean
       episodeFolderPath: map['episodeFolderPath'],
       date: DateTime.parse(map['date']),
       activeTime: Duration(microseconds: map['activeTime']),
