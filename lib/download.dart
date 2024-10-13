@@ -156,8 +156,12 @@ class DownloadScreenState extends State<DownloadScreen> {
           .toList();
 
       if (downloadStatuses[index].size == 0) {
+        setState(() {
+          downloadStatuses[index].status = "Getting file size...";
+        });
         int totalSizeInBytes = await getTotalDownloadSize(tsFiles, url);
         setState(() {
+          downloadStatuses[index].url = url;
           downloadStatuses[index].size = totalSizeInBytes;
         });
 
@@ -366,6 +370,7 @@ class DownloadScreenState extends State<DownloadScreen> {
           downloadStatuses[index].isDownloading = false;
           downloadStatuses[index].finished = true;
         });
+        _processDownloadQueue();
       } catch (e) {
         setState(() {
           downloadStatuses[index].status = 'Merging is error';
@@ -424,8 +429,12 @@ class DownloadScreenState extends State<DownloadScreen> {
       });
 
       for (var download in UrlDownload) {
-        DownloadInfo? isExisting =
-            await dbHelper.getDownloadByUrl(download.url);
+        String urlToCheck = download.url.contains('.1080')
+            ? download.url.split('.1080')[0]
+            : download.url.contains('original')
+                ? download.url
+                : download.url.split('.m3u8')[0];
+        DownloadInfo? isExisting = await dbHelper.getDownloadByUrl(urlToCheck);
         if (isExisting == null) {
           await dbHelper.insertDownload(download);
           DownloadInfo? inserted =
@@ -614,9 +623,11 @@ class DownloadScreenState extends State<DownloadScreen> {
       deletedownload.progress = 0.0;
       var isupdated = updateDownloadInfoDb(deletedownload);
       setState(() {});
-      Directory(deletedownload.episodeFolderPath).deleteSync(recursive: true);
-      Directory dir = Directory(deletedownload.episodeFolderPath);
-      dir.delete();
+      if (await Directory(deletedownload.episodeFolderPath).exists()) {
+        Directory(deletedownload.episodeFolderPath).deleteSync(recursive: true);
+        Directory dir = Directory(deletedownload.episodeFolderPath);
+        dir.delete();
+      }
       await dbHelper.deleteDownload(Id);
       setState(() {
         downloadStatuses.removeAt(downloadStatuses.indexOf(deletedownload));
