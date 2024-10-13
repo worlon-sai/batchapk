@@ -49,7 +49,7 @@ class DownloadScreenState extends State<DownloadScreen> {
   @override
   void initState() {
     super.initState();
-    _initializeDownloads();
+    _initializeDownloads(1);
     _parallelDownloadsController.addListener(() {
       setState(() {
         maxParallelDownloads =
@@ -73,27 +73,45 @@ class DownloadScreenState extends State<DownloadScreen> {
     widget.onDownloadAction?.call(DownloadAction.delete, ids: _selectedCardIds);
   }
 
-  Future<void> _initializeDownloads() async {
+  Future<void> _initializeDownloads(int intial) async {
     int downloading = _getActiveDownloads();
     downloadStatuses = await getAllDownloads();
     downloadStatuses.sort((a, b) =>
         ((b.isDownloading ? 1 : 0).compareTo(a.isDownloading ? 1 : 0)));
 
     for (var download in downloadStatuses) {
-      if (!download.finished && !download.isPaused) {
+      if (!download.finished && !download.isPaused && intial == 2) {
         if (download.isDownloading) {
           if (downloading < maxParallelDownloads) {
             _startDownload(downloadStatuses.indexOf(download));
             downloading++;
+          } else {
+            download.isDownloading = false;
+            _downloadQueue.add(downloadStatuses.indexOf(download));
+            print('after inserting ' +
+                _downloadQueue.length.toString() +
+                ' -- ' +
+                downloadStatuses.indexOf(download).toString());
           }
         } else {
           download.isDownloading = false;
           _downloadQueue.add(downloadStatuses.indexOf(download));
-          _processDownloadQueue();
+          print('after inserting ' +
+              _downloadQueue.length.toString() +
+              ' -- ' +
+              downloadStatuses.indexOf(download).toString());
         }
+      }
+      if (intial == 1 && !download.finished && !download.isPaused) {
+        download.isDownloading = false;
+        download.isPaused = true;
+        download.status = "Paused";
+        _downloadQueue.clear();
+        updateDownloadInfoDb(download);
       }
     }
 
+    _processDownloadQueue();
     setState(() {});
   }
 
@@ -451,7 +469,7 @@ class DownloadScreenState extends State<DownloadScreen> {
           // download.progress = isExisting.progress;
         }
       }
-      _initializeDownloads();
+      _initializeDownloads(2);
     }
   }
 
@@ -635,6 +653,7 @@ class DownloadScreenState extends State<DownloadScreen> {
       });
       _selectedCardIds = [];
     }
+    setState(() {});
   }
 
   void _toggleCardSelection(int id) {
