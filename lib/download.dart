@@ -535,6 +535,7 @@ class DownloadScreenState extends State<DownloadScreen> {
 
     if (downloadStatuses[index].status == "Downloaded .ts files") {
       await mergeTsToMkv(episodeFolderPath, outputMkvPath, index);
+      _processDownloadQueue();
     } else {
       print(
           "Condition false: downloadStatuses[$index].status = ${downloadStatuses[index].status}");
