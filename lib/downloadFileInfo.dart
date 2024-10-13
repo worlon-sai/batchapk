@@ -1,6 +1,6 @@
 class DownloadInfo {
   int? id; // Make it nullable for new objects
-  final String url;
+  String url;
   String status;
   double progress;
   int totalTsFiles;
