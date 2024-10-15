@@ -69,7 +69,7 @@ class _MainScreenState extends State<MainScreen> {
 
   void showIcon(int? id) {
     setState(() {
-      // _showDeleteIcon = true;
+      _showDeleteIcon = false;
     });
   }
 
@@ -103,7 +103,7 @@ class _MainScreenState extends State<MainScreen> {
         } else {
           setState(() {
             _showDeleteIcon = false;
-             _selectedCardIds = [];
+            _selectedCardIds = [];
           });
         }
         break;
@@ -111,7 +111,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   void Delete() {
-     _downloadScreenKey.currentState?.Delete();
+    _downloadScreenKey.currentState?.Delete();
   }
 
   @override

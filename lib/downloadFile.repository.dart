@@ -79,8 +79,8 @@ class DatabaseHelper {
     final db = await database;
     final List<Map<String, dynamic>> maps = await db.query(
       'downloads',
-      where: 'url = ?',
-      whereArgs: [url],
+      where: 'url  LIKE ?',
+      whereArgs: ['$url%'],
     );
 
     if (maps.isNotEmpty) {

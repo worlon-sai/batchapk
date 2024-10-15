@@ -1,0 +1,21 @@
+{
+"downloadstarted": ".ts files downloaded",
+"Paused": "Paused!",
+"DPaused":"Download Paused",
+"Gsize":"Getting file size...",
+"404":"Too many consecutive 404 errors. Aborting download.",
+"downloadCOmpleted":"Downloaded .ts files",
+"downgrade":"downgrading to 720p",
+"Error":"Error downloading .ts files",
+"ErrorDirectory":"Error: Directory not found",
+"No_Files":"No .ts files found for merging",
+"Merging":"Merging...",
+"MergingProgress":"Merging is in progress",
+"MergingError":"error during merging",
+"MergingCompleted":"Merging is completed",
+"Resume":"Resuming...",
+"AlreadyDownloaded":"Already Downloaded",
+"Waiting":"Waiting...",
+"Deleting":"Deleting..."
+
+}

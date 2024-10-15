@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'package:batchdownloader/Phrases.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
@@ -45,16 +46,27 @@ class DownloadScreenState extends State<DownloadScreen> {
   List<int> _selectedCardIds = [];
   DownloadFilter _selectedFilter = DownloadFilter.All;
   bool _selectAll = false;
+  bool _phrasesLoaded = false;
 
   @override
   void initState() {
     super.initState();
-    _initializeDownloads(1);
+    _loadPhrases(); // Load phrases asynchronously
+    _initializeDownloads([]);
     _parallelDownloadsController.addListener(() {
       setState(() {
         maxParallelDownloads =
             int.tryParse(_parallelDownloadsController.text) ?? 2;
       });
+    });
+  }
+
+  Future<void> _loadPhrases() async {
+    WidgetsFlutterBinding.ensureInitialized();
+    await Phrases.instance.loadPhrases();
+
+    setState(() {
+      _phrasesLoaded = true; // Update state after loading phrases
     });
   }
 
@@ -69,43 +81,44 @@ class DownloadScreenState extends State<DownloadScreen> {
 
   void _deleteDownloads() {
 // Suggested code may be subject to a license. Learn more: ~LicenseLog:4073815592.
-    widget.onShowIcon?.call(null);
+
     widget.onDownloadAction?.call(DownloadAction.delete, ids: _selectedCardIds);
   }
 
-  Future<void> _initializeDownloads(int intial) async {
-    int downloading = _getActiveDownloads();
+  String phrasesText(String text) {
+    return Phrases.instance.getPhrase(text);
+  }
+
+  Future<void> _initializeDownloads(List<int> intial) async {
+    int downloading = 0;
+    if (downloadStatuses.isNotEmpty) {
+      int downloading = _getActiveDownloads();
+    }
     downloadStatuses = await getAllDownloads();
     downloadStatuses.sort((a, b) =>
         ((b.isDownloading ? 1 : 0).compareTo(a.isDownloading ? 1 : 0)));
 
     for (var download in downloadStatuses) {
-      if (!download.finished && !download.isPaused && intial == 2) {
+      if (!download.finished && !download.isPaused && intial.isNotEmpty) {
         if (download.isDownloading) {
           if (downloading < maxParallelDownloads) {
-            _startDownload(downloadStatuses.indexOf(download));
+            _startDownload(download.id ?? 0);
             downloading++;
           } else {
             download.isDownloading = false;
-            _downloadQueue.add(downloadStatuses.indexOf(download));
-            print('after inserting ' +
-                _downloadQueue.length.toString() +
-                ' -- ' +
-                downloadStatuses.indexOf(download).toString());
+            _downloadQueue.add(download.id ?? 0);
           }
         } else {
           download.isDownloading = false;
-          _downloadQueue.add(downloadStatuses.indexOf(download));
-          print('after inserting ' +
-              _downloadQueue.length.toString() +
-              ' -- ' +
-              downloadStatuses.indexOf(download).toString());
+          _downloadQueue.add(download.id ?? 0);
         }
       }
-      if (intial == 1 && !download.finished && !download.isPaused) {
+      if ((intial.length == 0 || intial.isEmpty) &&
+          !download.finished &&
+          !download.isPaused) {
         download.isDownloading = false;
         download.isPaused = true;
-        download.status = "Paused";
+        download.status = phrasesText("Paused");
         _downloadQueue.clear();
         updateDownloadInfoDb(download);
       }
@@ -158,14 +171,33 @@ class DownloadScreenState extends State<DownloadScreen> {
     return totalSizeInBytes;
   }
 
+  DownloadInfo getDownloadInfoById(int id) {
+    try {
+      return downloadStatuses.firstWhere((status) => status.id == id);
+    } catch (e) {
+      print(id);
+      return downloadStatuses.firstWhere((status) => status.id == id);
+    }
+  }
+
+  void updateDownloadInfo(DownloadInfo download) {
+    downloadStatuses = downloadStatuses.map((edownload) {
+      if (edownload.id == download.id) {
+        edownload = download;
+      }
+      return edownload;
+    }).toList();
+  }
+
   Future<String> downloadM3u8AndSegments(
-      String url, String folderPath, int index) async {
-    _cancelTokens[index] = CancelToken();
+      String url, String folderPath, int id) async {
+    _cancelTokens[id] = CancelToken();
     int consecutive404Errors = 0;
     const int maxConsecutive404Errors = 4;
+    DownloadInfo downloadIndividual = getDownloadInfoById(id);
 
     try {
-      Response response = await dio.get(url, cancelToken: _cancelTokens[index]);
+      Response response = await dio.get(url, cancelToken: _cancelTokens[id]);
       String playlistContent = response.data.toString();
 
       List<String> tsFiles = playlistContent
@@ -173,29 +205,17 @@ class DownloadScreenState extends State<DownloadScreen> {
           .where((line) => line.endsWith('.ts'))
           .toList();
 
-      if (downloadStatuses[index].size == 0) {
-        setState(() {
-          downloadStatuses[index].status = "Getting file size...";
-        });
-        int totalSizeInBytes = await getTotalDownloadSize(tsFiles, url);
-        setState(() {
-          downloadStatuses[index].url = url;
-          downloadStatuses[index].size = totalSizeInBytes;
-        });
-
-        updateDownloadInfoDb(downloadStatuses[index]);
-      }
-
       setState(() {
-        downloadStatuses[index].totalTsFiles = tsFiles.length;
+        downloadIndividual.totalTsFiles = tsFiles.length;
+        updateDownloadInfo(downloadIndividual);
       });
-      int downloadedtsfiles = downloadStatuses[index].downloadedTsFiles > 2
-          ? downloadStatuses[index].downloadedTsFiles - 2
-          : downloadStatuses[index].downloadedTsFiles;
+      int downloadedtsfiles = downloadIndividual.downloadedTsFiles > 2
+          ? downloadIndividual.downloadedTsFiles - 2
+          : downloadIndividual.downloadedTsFiles;
       for (int i = downloadedtsfiles; i < tsFiles.length; i++) {
-        if (downloadStatuses[index].isPaused) {
-          print("Download paused for episode ${index + 1}");
-          _cancelTokens[index]?.cancel("Download Paused");
+        if (downloadIndividual.isPaused) {
+          print("Download paused for episode ${id + 1}");
+          _cancelTokens[id]?.cancel(phrasesText("DPaused"));
           return "";
         }
 
@@ -204,20 +224,23 @@ class DownloadScreenState extends State<DownloadScreen> {
 
         if (await File(savePath).exists()) {
           print('Skipping already downloaded $savePath');
-          _updateDownloadProgress(index, i, tsFiles.length);
+          _updateDownloadProgress(id, i, tsFiles.length, '');
           continue;
         }
 
         try {
-          await dio.download(tsUrl, savePath, cancelToken: _cancelTokens[index],
+          await dio.download(tsUrl, savePath, cancelToken: _cancelTokens[id],
               onReceiveProgress: (received, total) {
-            if (downloadStatuses[index].isPaused) {
-              print("Download paused for episode ${index + 1}");
-              _cancelTokens[index]?.cancel("Download Paused");
+            if (downloadIndividual.isPaused) {
+              print("Download paused for episode ${id + 1}");
+              _cancelTokens[id]?.cancel(phrasesText("DPaused"));
               return;
             }
-            _updateDownloadProgress(index, i, tsFiles.length);
           });
+
+          _updateDownloadProgress(id, i, tsFiles.length, savePath);
+          updateDownloadInfoDb(downloadIndividual);
+
           print('Downloaded $tsUrl');
           consecutive404Errors = 0; // Reset counter on successful download
         } catch (e) {
@@ -227,8 +250,8 @@ class DownloadScreenState extends State<DownloadScreen> {
             if (consecutive404Errors >= maxConsecutive404Errors) {
               print("Too many consecutive 404 errors. Aborting download.");
               setState(() {
-                downloadStatuses[index].status =
-                    'Too many consecutive 404 errors. Aborting download.';
+                downloadIndividual.status = phrasesText("404");
+                updateDownloadInfo(downloadIndividual);
               });
               throw e; // Re-throw the exception to trigger the outer catch block
             }
@@ -236,31 +259,36 @@ class DownloadScreenState extends State<DownloadScreen> {
             // Re-throw other errors
             throw e;
           }
+          return '';
         }
       }
 
       setState(() {
-        downloadStatuses[index].status = 'Downloaded .ts files';
+        downloadIndividual.status = phrasesText("downloadCOmpleted");
+        updateDownloadInfo(downloadIndividual);
       });
       return folderPath;
     } catch (e) {
       if (e is DioError && e.type == DioErrorType.cancel) {
         print('Download canceled');
         setState(() {
-          downloadStatuses[index].status = 'Paused';
+          downloadIndividual.status = phrasesText("Paused");
+          updateDownloadInfo(downloadIndividual);
         });
       } else {
         print('Error downloading .ts files: $e');
         if (url.contains('1080')) {
           setState(() {
-            downloadStatuses[index].status = 'downgrading to 720p';
+            downloadIndividual.status = phrasesText("downgrade");
+            updateDownloadInfo(downloadIndividual);
           });
           return downloadM3u8AndSegments(
-              url.replaceAll('1080.m3u8', '720.m3u8'), folderPath, index);
+              url.replaceAll('1080.m3u8', '720.m3u8'), folderPath, id);
         } else {
           setState(() {
-            downloadStatuses[index].status = 'Error downloading .ts files';
-            downloadStatuses[index].isDownloading = false;
+            downloadIndividual.status = phrasesText("Error");
+            downloadIndividual.isDownloading = false;
+            updateDownloadInfo(downloadIndividual);
           });
         }
       }
@@ -268,15 +296,23 @@ class DownloadScreenState extends State<DownloadScreen> {
     }
   }
 
-  void _updateDownloadProgress(int index, int currentFile, int totalFiles) {
+  Future<void> _updateDownloadProgress(
+      int id, int currentFile, int totalFiles, String? savePath) async {
+    DownloadInfo downloadIndividual = getDownloadInfoById(id);
+    if (savePath!.isNotEmpty) {
+      int fileSizeInBytes = await File(savePath).length();
+      downloadIndividual.size = downloadIndividual.size + fileSizeInBytes;
+    }
+
     setState(() {
-      downloadStatuses[index].downloadedTsFiles = currentFile + 1;
-      downloadStatuses[index].progress = (currentFile + 1) / totalFiles;
-      downloadStatuses[index].status =
-          '${downloadStatuses[index].downloadedTsFiles}/${downloadStatuses[index].totalTsFiles} .ts files downloaded (${(downloadStatuses[index].progress * 100).toStringAsFixed(1)}%)';
+      downloadIndividual.downloadedTsFiles = currentFile + 1;
+      downloadIndividual.progress = (currentFile + 1) / totalFiles;
+      downloadIndividual.status =
+          '${downloadIndividual.downloadedTsFiles}/${downloadIndividual.totalTsFiles} .ts files downloaded (${(downloadIndividual.progress * 100).toStringAsFixed(1)}%)';
+      updateDownloadInfo(downloadIndividual);
     });
-    if ((downloadStatuses[index].progress * 100).toInt() % 5 == 0) {
-      updateDownloadInfoDb(downloadStatuses[index]);
+    if ((downloadIndividual.progress * 100).toInt() % 5 == 0) {
+      updateDownloadInfoDb(downloadIndividual);
     }
   }
 
@@ -297,18 +333,19 @@ class DownloadScreenState extends State<DownloadScreen> {
   }
 
   Future<void> mergeTsToMkv(
-      String folderPath, String outputMkvPath, int index) async {
+      String folderPath, String outputMkvPath, int id) async {
     Directory dir = Directory(folderPath);
     await Permission.storage.request();
     requestStoragePermission();
     await Permission.storage.request();
     await Permission.manageExternalStorage.request();
-
+    DownloadInfo downloadIndividual = getDownloadInfoById(id);
     bool exists = await dir.exists();
     if (!exists) {
       print("Directory does not exist: $folderPath");
       setState(() {
-        downloadStatuses[index].status = 'Error: Directory not found';
+        downloadIndividual.status = phrasesText("ErrorDirectory");
+        updateDownloadInfo(downloadIndividual);
       });
       return;
     }
@@ -331,7 +368,8 @@ class DownloadScreenState extends State<DownloadScreen> {
     if (tsFiles.isEmpty) {
       print("No .ts files found to merge in directory: $folderPath");
       setState(() {
-        downloadStatuses[index].status = 'No .ts files found for merging';
+        downloadIndividual.status = phrasesText("No_Files");
+        updateDownloadInfo(downloadIndividual);
       });
       return;
     }
@@ -345,18 +383,20 @@ class DownloadScreenState extends State<DownloadScreen> {
 
     String command = "-f concat -safe 0 -i $inputsFile -c copy $outputMkvPath";
     setState(() {
-      downloadStatuses[index].status = 'Merging...';
+      downloadIndividual.status = phrasesText("Merging");
+      updateDownloadInfo(downloadIndividual);
     });
-    updateDownloadInfoDb(downloadStatuses[index]);
+    updateDownloadInfoDb(downloadIndividual);
 
     await FFmpegKit.execute(command).then((session) async {
       print("Merging process completed.");
 
       setState(() {
-        downloadStatuses[index].status = 'Merging is in progress';
-        downloadStatuses[index].progress = 0.5;
+        downloadIndividual.status = phrasesText("MergingProgress");
+        downloadIndividual.progress = 0.5;
+        updateDownloadInfo(downloadIndividual);
       });
-      updateDownloadInfoDb(downloadStatuses[index]);
+      updateDownloadInfoDb(downloadIndividual);
       try {
         print("Deleting .ts files and input.txt...");
 
@@ -375,33 +415,35 @@ class DownloadScreenState extends State<DownloadScreen> {
           await dir.delete();
           print("Deleted folder: $folderPath");
           setState(() {
-            downloadStatuses[index].status = 'Merging is completed';
-            downloadStatuses[index].progress = 1.0;
-            downloadStatuses[index].isDownloading = false;
-            downloadStatuses[index].finished = true;
+            downloadIndividual.status = phrasesText("MergingCompleted");
+            downloadIndividual.progress = 1.0;
+            downloadIndividual.isDownloading = false;
+            downloadIndividual.finished = true;
+            updateDownloadInfo(downloadIndividual);
           });
-          updateDownloadInfoDb(downloadStatuses[index]);
+          updateDownloadInfoDb(downloadIndividual);
         }
-        setState(() {
-          downloadStatuses[index].status = 'Merging is completed';
-          downloadStatuses[index].progress = 1.0;
-          downloadStatuses[index].isDownloading = false;
-          downloadStatuses[index].finished = true;
-        });
         _processDownloadQueue();
       } catch (e) {
         setState(() {
-          downloadStatuses[index].status = 'Merging is error';
-          downloadStatuses[index].progress = 0.0;
+          downloadIndividual.status = phrasesText("MergingError");
+          downloadIndividual.progress = 0.0;
+          updateDownloadInfo(downloadIndividual);
         });
         print("Error while deleting files: $e");
       }
     }).catchError((error) {
       print("Error during merging: $error");
       setState(() {
-        downloadStatuses[index].status = 'error during merging';
+        downloadIndividual.status = phrasesText("MergingError");
+        updateDownloadInfo(downloadIndividual);
       });
     });
+  }
+
+  Future<int> getSize(String Path) async {
+    int fileSizeInBytes = await File(Path).length();
+    return fileSizeInBytes;
   }
 
   Future<void> downloadFile() async {
@@ -446,7 +488,8 @@ class DownloadScreenState extends State<DownloadScreen> {
         }).toList();
       });
 
-      for (var download in UrlDownload) {
+      for (var i = 0; i < UrlDownload.length; i++) {
+        var download = UrlDownload[i];
         String urlToCheck = download.url.contains('.1080')
             ? download.url.split('.1080')[0]
             : download.url.contains('original')
@@ -454,7 +497,7 @@ class DownloadScreenState extends State<DownloadScreen> {
                 : download.url.split('.m3u8')[0];
         DownloadInfo? isExisting = await dbHelper.getDownloadByUrl(urlToCheck);
         if (isExisting == null) {
-          await dbHelper.insertDownload(download);
+          int insersuccessful = await dbHelper.insertDownload(download);
           DownloadInfo? inserted =
               await dbHelper.getDownloadByUrl(download.url);
           if (inserted != null) {
@@ -463,13 +506,10 @@ class DownloadScreenState extends State<DownloadScreen> {
             download.progress = inserted.progress;
           }
         } else {
-          download = isExisting;
-          // download.id = isExisting.id;
-          // download.size = isExisting.size;
-          // download.progress = isExisting.progress;
+          UrlDownload[i] = isExisting;
         }
       }
-      _initializeDownloads(2);
+      _initializeDownloads(UrlDownload.map((e) => e.id ?? 0).toList());
     }
   }
 
@@ -481,26 +521,33 @@ class DownloadScreenState extends State<DownloadScreen> {
     if (_downloadQueue.isNotEmpty &&
         _getActiveDownloads() < maxParallelDownloads) {
       print(_downloadQueue.length);
-      int index = _downloadQueue.removeFirst();
+      int id = _downloadQueue.removeFirst();
       setState(() {
-        downloadStatuses[index].isDownloading = true;
-        downloadStatuses[index].status = '.ts files downloaded';
+        downloadStatuses = downloadStatuses.map((download) {
+          if (download.id == id) {
+            download.isDownloading = true;
+            download.status = phrasesText('downloadstarted');
+          }
+          return download;
+        }).toList();
       });
-      _startDownload(index);
+      _startDownload(id);
     }
   }
 
-  void _startDownload(int index) {
+  void _startDownload(int id) {
+    DownloadInfo downloadIndividual = getDownloadInfoById(id);
     setState(() {
-      downloadStatuses[index].isPaused = false;
-      if (downloadStatuses[index].status == 'Paused') {
-        downloadStatuses[index].status = 'Resuming...';
+      downloadIndividual.isPaused = false;
+      if (downloadIndividual.status == phrasesText("Paused")) {
+        downloadIndividual.status = phrasesText("Resume");
       } else {
-        downloadStatuses[index].status = '.ts files downloaded';
-        downloadStatuses[index].isDownloading = true; // Update status
+        downloadIndividual.status = phrasesText("downloadstarted");
+        downloadIndividual.isDownloading = true; // Update status
       }
+      updateDownloadInfo(downloadIndividual);
     });
-    _downloadAndMergeEpisode(index);
+    _downloadAndMergeEpisode(id);
   }
 
   // Function to get the number of currently active downloads
@@ -509,54 +556,63 @@ class DownloadScreenState extends State<DownloadScreen> {
   }
 
   // Function to handle download and merge of a single episode
-  Future<void> _downloadAndMergeEpisode(int index) async {
-    String url = downloadStatuses[index].url;
+  Future<void> _downloadAndMergeEpisode(int id) async {
+    DownloadInfo downloadIndividual = getDownloadInfoById(id);
+    String url = downloadIndividual.url;
 
     String m3u8_url = url;
 
-    String episodeFolderPath = downloadStatuses[index].episodeFolderPath;
+    String episodeFolderPath = downloadIndividual.episodeFolderPath;
     Directory(episodeFolderPath).createSync();
     setState(() {
-      downloadStatuses[index].isDownloading = true;
-      downloadStatuses[index].status = '.ts files downloaded';
+      downloadIndividual.isDownloading = true;
+      downloadIndividual.status = phrasesText("downloadstarted");
+      updateDownloadInfo(downloadIndividual);
     });
 
-    String outputMkvPath = downloadStatuses[index].outputMkvPath;
+    String outputMkvPath = downloadIndividual.outputMkvPath;
 
     if (await File(outputMkvPath).exists()) {
       print('Skipping already downloaded $outputMkvPath');
 
-      setState(() {
-        downloadStatuses[index].status = 'Already Downloaded';
-        downloadStatuses[index].progress = 1.0;
-        downloadStatuses[index].finished = true;
-        downloadStatuses[index].isDownloading = false;
+      setState(() async {
+        downloadIndividual.status = phrasesText("AlreadyDownloaded");
+        downloadIndividual.size = await getSize(outputMkvPath);
+        downloadIndividual.progress = 1.0;
+        downloadIndividual.finished = true;
+        downloadIndividual.isDownloading = false;
+        updateDownloadInfo(downloadIndividual);
       });
-      updateDownloadInfoDb(downloadStatuses[index]);
+      updateDownloadInfoDb(downloadIndividual);
+      setState(() {});
+
       List<DownloadInfo> alldownloads = await dbHelper.getAllDownloads();
       Directory dir = Directory(episodeFolderPath);
       dir.delete();
-
+      print(_downloadQueue.length);
       // Start the next download in the queue if available
       _processDownloadQueue();
       return;
     }
-    Future<int> com = updateDownloadInfoDb(downloadStatuses[index]);
+    Future<int> com = updateDownloadInfoDb(downloadIndividual);
     List<DownloadInfo> alldownloads = await dbHelper.getAllDownloads();
-    if (downloadStatuses[index].isPaused) {
-      print("Download paused for episode ${index + 1}");
-      _cancelTokens[index]?.cancel("Download Paused"); // Cancel the download
+    if (downloadIndividual.isPaused) {
+      print("Download paused for episode ${id + 1}");
+      _cancelTokens[id]?.cancel(phrasesText("DPaused")); // Cancel the download
       return;
     }
 
-    await downloadM3u8AndSegments(url, episodeFolderPath, index);
+    await downloadM3u8AndSegments(url, episodeFolderPath, id);
 
-    if (downloadStatuses[index].status == "Downloaded .ts files") {
-      await mergeTsToMkv(episodeFolderPath, outputMkvPath, index);
+    if (downloadIndividual.status == phrasesText("downloadCOmpleted")) {
+      await mergeTsToMkv(episodeFolderPath, outputMkvPath, id);
+      downloadIndividual.size = await getSize(outputMkvPath);
+      updateDownloadInfo(downloadIndividual);
+      updateDownloadInfoDb(downloadIndividual);
       _processDownloadQueue();
     } else {
       print(
-          "Condition false: downloadStatuses[$index].status = ${downloadStatuses[index].status}");
+          "Condition false: downloadStatuses[$id].status = ${downloadIndividual.status}");
     }
 
     // Download and merging completed for this episode, start the next
@@ -583,7 +639,10 @@ class DownloadScreenState extends State<DownloadScreen> {
     switch (_selectedFilter) {
       case DownloadFilter.Downloading:
         return downloadStatuses
-            .where((status) => status.isDownloading && status.progress < 1.0)
+            .where((status) =>
+                status.isDownloading &&
+                !status.isPaused &&
+                status.progress < 1.0)
             .toList();
       case DownloadFilter.Downloaded:
         return downloadStatuses
@@ -600,13 +659,13 @@ class DownloadScreenState extends State<DownloadScreen> {
     for (var download in downloadStatuses) {
       if (!download.finished && download.isPaused) {
         download.isPaused = false;
-        download.status = "Waiting...";
+        download.status = phrasesText("Waiting");
         if (activedownloads < maxParallelDownloads) {
-          _startDownload(downloadStatuses.indexOf(download));
+          _startDownload(download.id ?? 0);
           activedownloads++;
         } else {
           download.isDownloading = false;
-          _downloadQueue.add(downloadStatuses.indexOf(download));
+          _downloadQueue.add(download.id ?? 0);
           _processDownloadQueue();
         }
       }
@@ -620,9 +679,9 @@ class DownloadScreenState extends State<DownloadScreen> {
       if (!download.finished &&
           (download.isDownloading || !download.isPaused)) {
         download.isPaused = true;
-        download.status = "Paused";
+        download.status = phrasesText("Paused");
         download.isDownloading = false;
-        _downloadQueue.remove(downloadStatuses.indexOf(download));
+        _downloadQueue.remove(download.id ?? 0);
         _processDownloadQueue();
       }
       updateDownloadInfoDb(download);
@@ -636,16 +695,19 @@ class DownloadScreenState extends State<DownloadScreen> {
         downloadStatuses.firstWhere((e) => e.id == Id).status = "Deleting...";
       });
       var deletedownload = downloadStatuses.firstWhere((e) => e.id == Id);
-      deletedownload.status = "Deleting...";
+      deletedownload.status = phrasesText("Deleting");
       deletedownload.isPaused = true;
       deletedownload.isDownloading = false;
       deletedownload.progress = 0.0;
+      updateDownloadInfo(deletedownload);
       var isupdated = updateDownloadInfoDb(deletedownload);
       setState(() {});
       if (await Directory(deletedownload.episodeFolderPath).exists()) {
         Directory(deletedownload.episodeFolderPath).deleteSync(recursive: true);
-        Directory dir = Directory(deletedownload.episodeFolderPath);
-        dir.delete();
+        if (await Directory(deletedownload.episodeFolderPath).exists()) {
+          Directory dir = Directory(deletedownload.episodeFolderPath);
+          dir.delete();
+        }
       }
       await dbHelper.deleteDownload(Id);
       setState(() {
@@ -653,6 +715,8 @@ class DownloadScreenState extends State<DownloadScreen> {
       });
       _selectedCardIds = [];
     }
+    widget.onShowIcon?.call(null);
+
     setState(() {});
   }
 
@@ -747,6 +811,7 @@ class DownloadScreenState extends State<DownloadScreen> {
                     if (uiselectedFilePath != null &&
                         uiselectedFilePath!.isNotEmpty) {
                       downloadFile();
+
                       Navigator.of(context)
                           .pop(); // Close the dialog after starting download
                     }
@@ -831,10 +896,11 @@ class DownloadScreenState extends State<DownloadScreen> {
         onPressed: () {
           // Retry logic (same as play button)
           setState(() {
-            downloadStatuses[index].isPaused = false;
-            downloadStatuses[index].status = "Waiting...";
+            status.isPaused = false;
+            status.status = phrasesText("Waiting");
+            updateDownloadInfo(status);
           });
-          _downloadQueue.add(index);
+          _downloadQueue.add(status.id ?? 0);
           _processDownloadQueue();
         },
         icon: const Icon(Icons.refresh, color: Colors.blue),
@@ -852,11 +918,12 @@ class DownloadScreenState extends State<DownloadScreen> {
       return IconButton(
         onPressed: () {
           setState(() {
-            downloadStatuses[index].isPaused = false;
-            downloadStatuses[index].status = "Waiting...";
+            status.isPaused = false;
+            status.status = phrasesText("Waiting");
+            updateDownloadInfo(status);
           });
-          updateDownloadInfoDb(downloadStatuses[index]);
-          _downloadQueue.add(index);
+          updateDownloadInfoDb(status);
+          _downloadQueue.add(status.id ?? 0);
           _processDownloadQueue();
         },
         icon: const Icon(
@@ -866,8 +933,8 @@ class DownloadScreenState extends State<DownloadScreen> {
       );
     }
     // Merging in progress
-    else if (status.status == "Merging..." ||
-        status.status == "Merging is in progress") {
+    else if (status.status == phrasesText("Merging") ||
+        status.status == phrasesText("MergingProgress")) {
       return Icon(
         Icons.check_circle_outline,
         color: Colors.orange,
@@ -878,21 +945,22 @@ class DownloadScreenState extends State<DownloadScreen> {
       return IconButton(
         onPressed: () {
           setState(() {
-            downloadStatuses[index].isPaused = true;
-            downloadStatuses[index].isDownloading = false;
-            downloadStatuses[index].status = "Paused";
+            status.isPaused = true;
+            status.isDownloading = false;
+            status.status = phrasesText("Paused");
+            updateDownloadInfo(status);
           });
           // Remove the paused download from the queue
-          if (_downloadQueue.contains(index)) {
-            _downloadQueue.remove(index);
+          if (_downloadQueue.contains(status.id ?? 0)) {
+            _downloadQueue.remove(status.id ?? 0);
           }
-          updateDownloadInfoDb(downloadStatuses[index]);
+          updateDownloadInfoDb(status);
           // Process the queue to potentially start the next download
           _processDownloadQueue();
         },
         icon: Icon(
           Icons.pause_circle,
-          color: downloadStatuses[index].status.contains("Waiting")
+          color: status.status.contains(phrasesText("Waiting"))
               ? Colors.blue
               : Colors.orange, // Change color to blue when waiting
         ),
